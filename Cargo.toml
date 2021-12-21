@@ -9,3 +9,6 @@ edition = "2021"
 ndarray = "0.15"
 rand = "0.8"
 rand_distr = "0.4"
+
+[dev-dependencies]
+nom = "7.0"

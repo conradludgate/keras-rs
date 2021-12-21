@@ -1,10 +1,19 @@
 #![feature(generic_associated_types)]
 
-use ndarray::{ArrayBase, Data, Dimension, LinalgScalar, OwnedRepr, RawData, ShapeError, ViewRepr};
-use rand_distr::num_traits::FromPrimitive;
+use model::ModelBuilder;
+use ndarray::{
+    ArrayBase, Data, Dimension, LinalgScalar, OwnedRepr, RawData, ScalarOperand, ShapeError,
+    ViewRepr,
+};
+use rand_distr::num_traits::{Float, FromPrimitive};
 
+pub mod activation;
 pub(crate) mod array;
 pub mod linear;
+pub mod network;
+pub mod model;
+pub mod optimise;
+pub mod cost;
 
 /// An abstract representation of a Computation Graph.
 pub trait GraphBuilder: Sized {
@@ -15,10 +24,14 @@ pub trait GraphBuilder: Sized {
     type Layer: Layer<InputShape = Self::InputShape, OutputShape = Self::OutputShape>;
 
     fn with_input_shape(self, input_shape: Self::InputShape) -> Self::Layer;
+
+    fn build_model(self) -> ModelBuilder<Self> {
+        model::builder(self)
+    }
 }
 
-pub trait Scalar: LinalgScalar + FromPrimitive {}
-impl<S> Scalar for S where S: LinalgScalar + FromPrimitive {}
+pub trait Scalar: LinalgScalar + ScalarOperand + Float + FromPrimitive {}
+impl<S> Scalar for S where S: LinalgScalar + ScalarOperand + Float + FromPrimitive {}
 
 pub trait Layer {
     type InputShape: Dimension;

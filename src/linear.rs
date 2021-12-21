@@ -1,38 +1,46 @@
 use ndarray::{
-    ArrayBase, ArrayView, ArrayViewMut, Axis, Data, Dimension, Ix1, Ix2, OwnedRepr, RawData,
-    ShapeError, ViewRepr,
+    ArrayBase, ArrayView, ArrayViewMut, Axis, Data, Dimension, IntoDimension, Ix1, Ix2, OwnedRepr,
+    RawData, ShapeError, ViewRepr,
 };
 
 use crate::{
     array::{compact_front, dot_front, dot_inner},
-    GraphBuilder, Layer, Scalar, TrainableLayer,
+    GraphBuilder, Scalar, TrainableLayer,
 };
 
-pub struct LinearBuilder {
+impl Layer {
+    pub fn output(shape: impl IntoDimension<Dim = Ix1>) -> Builder {
+        Builder {
+            output_shape: shape.into_dimension(),
+        }
+    }
+}
+
+pub struct Builder {
     output_shape: Ix1,
 }
 
-impl GraphBuilder for LinearBuilder {
+impl GraphBuilder for Builder {
     type InputShape = Ix1;
     type OutputShape = Ix1;
 
-    type Layer = LinearLayer;
+    type Layer = Layer;
 
     fn with_input_shape(self, input_shape: Self::InputShape) -> Self::Layer {
         let Self { output_shape } = self;
-        LinearLayer {
+        Layer {
             output_shape,
             input_shape,
         }
     }
 }
 
-pub struct LinearLayer {
+pub struct Layer {
     input_shape: Ix1,
     output_shape: Ix1,
 }
 
-impl Layer for LinearLayer {
+impl crate::Layer for Layer {
     type InputShape = Ix1;
     type OutputShape = Ix1;
 
@@ -74,27 +82,33 @@ impl Layer for LinearLayer {
     fn apply<F: Scalar>(
         &self,
         state: Self::State<ViewRepr<&F>>,
-        input: ArrayBase<impl Data<Elem = F>, <<Self as Layer>::InputShape as Dimension>::Larger>,
-    ) -> ArrayBase<OwnedRepr<F>, <<Self as Layer>::OutputShape as Dimension>::Larger> {
+        input: ArrayBase<
+            impl Data<Elem = F>,
+            <<Self as crate::Layer>::InputShape as Dimension>::Larger,
+        >,
+    ) -> ArrayBase<OwnedRepr<F>, <<Self as crate::Layer>::OutputShape as Dimension>::Larger> {
         state.weights.dot(&input) + state.biases
     }
 }
 
-impl TrainableLayer for LinearLayer {
+impl TrainableLayer for Layer {
     fn backward<F: Scalar>(
         &self,
         state: Self::State<ViewRepr<&F>>,
         d_state: Self::State<ViewRepr<&mut F>>,
-        input: ArrayBase<impl Data<Elem = F>, <<Self as Layer>::InputShape as Dimension>::Larger>,
+        input: ArrayBase<
+            impl Data<Elem = F>,
+            <<Self as crate::Layer>::InputShape as Dimension>::Larger,
+        >,
         _output: ArrayBase<
             impl Data<Elem = F>,
-            <<Self as Layer>::OutputShape as Dimension>::Larger,
+            <<Self as crate::Layer>::OutputShape as Dimension>::Larger,
         >,
         d_output: ArrayBase<
             impl Data<Elem = F>,
-            <<Self as Layer>::OutputShape as Dimension>::Larger,
+            <<Self as crate::Layer>::OutputShape as Dimension>::Larger,
         >,
-    ) -> ArrayBase<OwnedRepr<F>, <<Self as Layer>::InputShape as Dimension>::Larger> {
+    ) -> ArrayBase<OwnedRepr<F>, <<Self as crate::Layer>::InputShape as Dimension>::Larger> {
         dot_front(input, d_output.view()).assign_to(d_state.weights);
         compact_front(d_output.view())
             .mean_axis(Axis(0))
