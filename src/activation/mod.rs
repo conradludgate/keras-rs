@@ -1,6 +1,6 @@
 use ndarray::{ArrayBase, Data, Dimension, OwnedRepr};
 
-use crate::{GraphBuilder, Layer, TrainableLayer};
+use crate::{GraphBuilder, Initialise, Layer, TrainableLayer, Scalar};
 
 pub mod relu;
 
@@ -70,6 +70,16 @@ impl<A: Activation> Layer for ActivationLayer<A> {
         input: ArrayBase<impl Data<Elem = F>, <<Self as Layer>::InputShape as Dimension>::Larger>,
     ) -> ArrayBase<OwnedRepr<F>, <<Self as Layer>::OutputShape as Dimension>::Larger> {
         A::apply(input)
+    }
+}
+
+unsafe impl<F: Scalar, A: Activation> Initialise<F> for ActivationLayer<A> {
+    fn init(
+        &self,
+        _rng: &mut impl rand::Rng,
+        state: &mut Self::State<ndarray::ViewRepr<&mut std::mem::MaybeUninit<F>>>,
+    ) {
+        debug_assert_eq!(std::mem::size_of_val(state), 0);
     }
 }
 

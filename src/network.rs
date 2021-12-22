@@ -1,6 +1,7 @@
 use ndarray::Dimension;
+use rand::Rng;
 
-use crate::{GraphBuilder, Layer};
+use crate::{GraphBuilder, Initialise, Layer, Scalar, TrainableLayer};
 
 impl<G1, G2> GraphBuilder for (G1, G2)
 where
@@ -67,6 +68,39 @@ where
     > {
         let inner = self.0.apply(state.0, input);
         self.1.apply(state.1, inner)
+    }
+}
+
+unsafe impl<F: Scalar, L1, L2> Initialise<F> for (L1, L2)
+where
+    L1: Layer + Initialise<F>,
+    L2: Layer<InputShape = L1::OutputShape> + Initialise<F>,
+{
+    fn init(&self, rng: &mut impl Rng, state: &mut Self::State<ndarray::ViewRepr<&mut std::mem::MaybeUninit<F>>>) {
+        self.0.init(rng, &mut state.0);
+        self.1.init(rng, &mut state.1);
+    }
+}
+
+impl<L1, L2> TrainableLayer for (L1, L2)
+where
+    L1: TrainableLayer,
+    L2: TrainableLayer + Layer<InputShape = L1::OutputShape>,
+{
+    fn
+
+    fn backward<F: Scalar>(
+        &self,
+        state: Self::State<ndarray::ViewRepr<&F>>,
+        d_state: Self::State<ndarray::ViewRepr<&mut std::mem::MaybeUninit<F>>>,
+        input: Arr<impl ndarray::Data<Elem = F>, Self::InputShape>,
+        d_input: Arr<ndarray::ViewRepr<&mut std::mem::MaybeUninit<F>>, Self::InputShape>,
+        output: Arr<impl ndarray::Data<Elem = F>, Self::OutputShape>,
+        d_output: Arr<impl ndarray::Data<Elem = F>, Self::OutputShape>,
+    ) -> Arr<ndarray::OwnedRepr<F>, Self::InputShape> {
+
+        let di = self.1.backward(state.1, d_state.1, input, output, d_output);
+        self.0.backward(state.1, d_state.0, input, output, di)
     }
 }
 

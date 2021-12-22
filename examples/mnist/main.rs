@@ -22,6 +22,8 @@ fn main() {
         Relu
     ];
 
+    let model = network.into_model(28*28);
+
     let optimiser = Adam::<f64>::new(0.001, 0.9, 0.99, 1e-8);
     let model = network
         .build_model()
@@ -30,10 +32,7 @@ fn main() {
         .with_optimiser(optimiser)
         .initialise();
 
-    // let graph = network.input_shape(28 * 28);
 
-    // New trainer with mean squared error cost function and
-    // stochastic gradient descent optimisation (alpha=0.1)
     // let mut trainer = Train::new(network, MSE, SGD::new(0.01));
 
     // let mut trainer = Train {
