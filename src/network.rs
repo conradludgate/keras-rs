@@ -142,15 +142,15 @@ where
 /// ```
 #[macro_export]
 macro_rules! net {
-    ($g0:expr) => {
+    ($g0:expr $(,)?) => {
         $g0
     };
-    ($($g0:expr, $g1:expr),*) => {
+    ($($g0:expr, $g1:expr),* $(,)?) => {
         $crate::net!($(
             ($g0, $g1)
         ),*)
     };
-    ($g:expr, $($g0:expr, $g1:expr),*) => {
+    ($g:expr, $($g0:expr, $g1:expr),* $(,)?) => {
         $crate::net!(
             $g,
             $(

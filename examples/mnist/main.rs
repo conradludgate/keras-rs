@@ -20,7 +20,7 @@ fn main() {
         linear::Layer::output(16),
         Relu,
         linear::Layer::output(10),
-        Sigmoid
+        Sigmoid,
     ];
 
     let model = network.into_model(28 * 28);
