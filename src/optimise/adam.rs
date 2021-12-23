@@ -47,28 +47,13 @@ impl<F: Scalar> Optimiser<F> for Adam<F> {
 
         let one = F::one();
 
-        // m_t = b1 * m_t-1 + (1 - b1) * g_t
-        self.m.iter_mut().zip(grads).for_each(|(m, &g)| {
-            *m = *m * b1 + g * (one - b1);
-        });
+        for i in 0..graph.len() {
+            self.m[i] = self.m[i] * b1 + grads[i] * (one - b1);
+            self.v[i] = self.v[i] * b2 + grads[i].powi(2) * (one - b2);
 
-        // v_t = b2 * v_t-1 + (1 - b2) * g_t^2
-        self.v.iter_mut().zip(grads).for_each(|(v, &g)| {
-            *v = *v * b2 + g.powi(2) * (one - b2);
-        });
-
-        // m_t' = m_t / (1 - b1^t)
-        let mb = self.m.iter().map(|&m| m / (one - b1.powi(self.t)));
-
-        // v_t' = v_t / (1 - b2^t)
-        let vb = self.v.iter().map(|&v| v / (one - b2.powi(self.t)));
-
-        // x_t = a * m_t' / (sqrt(v_t') + e)
-        let mb = mb.zip(vb).map(|(m, v)| m * a / (v.sqrt() + e));
-
-        // g_t = g_t-1 - x_t
-        graph.iter_mut().zip(mb).for_each(|(g, m)| {
-            *g = *g - m;
-        });
+            let mb = self.m[i] / (one - b1.powi(self.t));
+            let vb = self.v[i] / (one - b1.powi(self.t));
+            graph[i] = graph[i] - a * mb / (vb.sqrt() + e);
+        }
     }
 }

@@ -18,6 +18,7 @@ pub mod model;
 pub mod network;
 pub mod optimise;
 
+/// Type representing a simple ArrayBase, but dimension larger to account for batches
 pub type Arr<S, D> = ArrayBase<S, <D as Dimension>::Larger>;
 pub type UninitRepr<'f, F> = ViewRepr<&'f mut MaybeUninit<F>>;
 pub type UninitArr<'f, F, D> = Arr<UninitRepr<'f, F>, D>;
@@ -59,8 +60,8 @@ pub trait GraphBuilder: Sized {
     }
 }
 
-pub trait Scalar: LinalgScalar + ScalarOperand + Float + FromPrimitive {}
-impl<S> Scalar for S where S: LinalgScalar + ScalarOperand + Float + FromPrimitive {}
+pub trait Scalar: LinalgScalar + ScalarOperand + Float + FromPrimitive + std::fmt::Debug {}
+impl<S> Scalar for S where S: LinalgScalar + ScalarOperand + Float + FromPrimitive + std::fmt::Debug {}
 
 pub trait Layer {
     type InputShape: Dimension;

@@ -1,7 +1,7 @@
 mod parse;
 
 use keras_rs::{
-    activation::relu::Relu, cost::mse::MSE, linear, model::ModelTrainer, net, optimise::adam::Adam,
+    activation::relu::Relu, cost::mse::MSE, linear, model::Trainer, net, optimise::adam::Adam,
     GraphBuilder,
 };
 use ndarray::{Array2, AssignElem};
@@ -26,11 +26,11 @@ fn main() {
     let model = network.into_model(28 * 28);
 
     let optimiser = Adam::new(0.001, 0.9, 0.99, 1e-8);
-    let mut trainer = ModelTrainer {
+    let mut trainer = Trainer {
         model,
         optimiser,
         cost: MSE,
-    };
+    }.build();
 
     let mut costs = vec![];
 

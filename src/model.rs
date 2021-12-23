@@ -26,13 +26,37 @@ impl<F: Scalar, G: GraphBuilder> Model<F, G> {
     }
 }
 
-pub struct ModelTrainer<F: Scalar, G: GraphBuilder, O: Optimiser<F>, C: Cost<G::OutputShape>>
+pub struct Trainer<F: Scalar, G: GraphBuilder, O: Optimiser<F>, C: Cost<G::OutputShape>>
 where
     G::Layer: TrainableLayer,
 {
     pub model: Model<F, G>,
     pub optimiser: O,
     pub cost: C,
+}
+
+pub struct ModelTrainer<F: Scalar, G: GraphBuilder, O: Optimiser<F>, C: Cost<G::OutputShape>>
+where
+    G::Layer: TrainableLayer,
+{
+    trainer: Trainer<F, G, O, C>,
+    bufs: Bufs<F>,
+}
+
+struct Bufs<F> {
+    data: Vec<F>,
+    gradiants: Vec<F>,
+    train_state: Vec<F>,
+}
+
+impl<F> Default for Bufs<F> {
+    fn default() -> Self {
+        Self {
+            data: vec![],
+            gradiants: vec![],
+            train_state: vec![],
+        }
+    }
 }
 
 impl<F: Scalar, G: GraphBuilder, O: Optimiser<F>, C: Cost<G::OutputShape>> ModelTrainer<F, G, O, C>
@@ -45,22 +69,42 @@ where
         expected: Arr<impl Data<Elem = F>, G::OutputShape>,
         batch_size: usize,
     ) -> F {
+        self.trainer
+            .train_epoch(input, expected, batch_size, &mut self.bufs)
+    }
+}
+
+impl<F: Scalar, G: GraphBuilder, O: Optimiser<F>, C: Cost<G::OutputShape>> Trainer<F, G, O, C>
+where
+    G::Layer: TrainableLayer,
+{
+    pub fn build(mut self) -> ModelTrainer<F, G, O, C> {
+        self.optimiser.init(self.model.layer.size());
+        ModelTrainer {
+            trainer: self,
+            bufs: Bufs::default(),
+        }
+    }
+
+    fn train_epoch(
+        &mut self,
+        input: Arr<impl Data<Elem = F>, G::InputShape>,
+        expected: Arr<impl Data<Elem = F>, G::OutputShape>,
+        batch_size: usize,
+        bufs: &mut Bufs<F>,
+    ) -> F {
         let total_inputs = input.raw_dim()[0];
 
         let mut rng = thread_rng();
         let mut indices: Vec<_> = (0..total_inputs).collect();
         indices.shuffle(&mut rng);
 
-        let mut data_buf = vec![];
-        let mut train_state_buf = vec![];
-        let mut gradiants_buf = vec![];
-
         let mut cost = F::zero();
         for indices in indices.chunks(batch_size) {
             let (input, expected) =
-                self.select_batch(input.view(), expected.view(), indices, &mut data_buf);
-            cost =
-                cost + self.train_batch(input, expected, &mut gradiants_buf, &mut train_state_buf);
+                self.select_batch(input.view(), expected.view(), indices, &mut bufs.data);
+            cost = cost
+                + self.train_batch(input, expected, &mut bufs.gradiants, &mut bufs.train_state);
         }
 
         cost / F::from_usize((total_inputs + batch_size - 1) / batch_size).unwrap()
@@ -109,7 +153,7 @@ where
         (input, expected)
     }
 
-    pub fn train_batch(
+    fn train_batch(
         &mut self,
         input: Arr<impl Data<Elem = F>, G::InputShape>,
         expected: Arr<impl Data<Elem = F>, G::OutputShape>,
