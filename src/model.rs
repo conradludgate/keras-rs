@@ -128,7 +128,7 @@ where
         let mut expected_dim = expected.raw_dim();
         expected_dim.as_array_view_mut()[0] = indices.len();
 
-        let ((_, input), (_, expected)) = unsafe {
+        let (_, _, input, expected) = unsafe {
             fill2(
                 data_buf,
                 input_dim.size(),
@@ -255,12 +255,12 @@ unsafe fn fill2<T, O1, O2>(
     n2: usize,
     f1: impl FnOnce(&mut [MaybeUninit<T>]) -> O1,
     f2: impl FnOnce(&mut [MaybeUninit<T>]) -> O2,
-) -> ((O1, &[T]), (O2, &[T])) {
+) -> (O1, O2, &[T], &[T]) {
     let ((o1, o2), s) = fill(buf, n1 + n2, |s| {
         let (s1, s2) = s.split_at_mut(n1);
         (f1(s1), f2(s2))
     });
 
     let (s1, s2) = s.split_at(n1);
-    ((o1, s1), (o2, s2))
+    (o1, o2, s1, s2)
 }

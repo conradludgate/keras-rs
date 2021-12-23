@@ -1,7 +1,7 @@
 use crate::Scalar;
 
 pub mod adam;
-// pub mod sgd;
+pub mod sgd;
 
 pub trait Optimiser<F: Scalar> {
     fn init(&mut self, size: usize);

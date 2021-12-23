@@ -1,8 +1,5 @@
-use ndarray::LinalgScalar;
-
-use crate::Mappable;
-
 use super::Optimiser;
+use crate::Scalar;
 
 #[derive(Debug, Copy, Clone)]
 pub struct SGD<F>(F);
@@ -13,12 +10,12 @@ impl<F> SGD<F> {
     }
 }
 
-impl<F: Scalar> Optimiser<G> for SGD<F>
-where
-    G: Mappable<F>,
-    F: LinalgScalar,
-{
-    fn optimise(&mut self, graph: &mut , grads: G) {
-        graph.map_mut_with(&grads, |theta, &g| *theta = *theta - g * self.0);
+impl<F: Scalar> Optimiser<F> for SGD<F> {
+    fn init(&mut self, _size: usize) {}
+
+    fn optimise(&mut self, graph: &mut [F], grads: &[F]) {
+        for (theta, &g) in graph.iter_mut().zip(grads) {
+            *theta = *theta - self.0 * g;
+        }
     }
 }
