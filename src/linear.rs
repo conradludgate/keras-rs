@@ -7,7 +7,7 @@ use ndarray::{
 use rand::Rng;
 use rand_distr::{Distribution, Normal, StandardNormal};
 
-use crate::{Arr, GraphBuilder, Initialise, OwnedArr, Scalar, TrainableLayer};
+use crate::{Arr, GraphBuilder, Initialise, OwnedArr, Scalar, TrainableLayer, Slice};
 
 impl Layer {
     pub fn output(shape: impl IntoDimension<Dim = Ix1>) -> Builder {
@@ -57,23 +57,13 @@ impl crate::Layer for Layer {
         self.output_shape
     }
 
-    fn view<'a, F>(&self, data: &'a [F]) -> Self::State<ViewRepr<&'a F>> {
+    fn view<S: Slice>(&self, data: S) -> Self::State<S::Repr> {
         let i = self.input_shape.into_pattern();
         let o = self.output_shape.into_pattern();
 
-        let (weights, biases) = data.split_at(i * o);
-        let weights = ArrayView::from_shape([i, o], weights).unwrap();
-        let biases = ArrayView::from_shape(o, biases).unwrap();
-        LinearState { weights, biases }
-    }
-
-    fn view_mut<'a, F>(&self, data: &'a mut [F]) -> Self::State<ViewRepr<&'a mut F>> {
-        let i = self.input_shape.into_pattern();
-        let o = self.output_shape.into_pattern();
-
-        let (weights, biases) = data.split_at_mut(i * o);
-        let weights = ArrayViewMut::from_shape([i, o], weights).unwrap();
-        let biases = ArrayViewMut::from_shape(o, biases).unwrap();
+        let (weights, biases) = data.split(i * o);
+        let weights = weights.into_array([i, o]);
+        let biases = biases.into_array(o);
         LinearState { weights, biases }
     }
 

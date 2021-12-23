@@ -15,7 +15,7 @@ pub struct Model<F: Scalar, G: GraphBuilder> {
 
 impl<F: Scalar, G: GraphBuilder> Model<F, G> {
     fn state(&self) -> <G::Layer as Layer>::State<ViewRepr<&'_ F>> {
-        self.layer.view(&self.data)
+        self.layer.view(self.data.as_slice())
     }
 
     pub fn apply(
@@ -226,7 +226,7 @@ where
         // Train Layer backward should initialise every value
         unsafe {
             fill(gradiants_buf, self.model.layer.size(), |d_state| {
-                let d_state = self.model.layer.view_mut(d_state);
+                let d_state = self.model.layer.view(d_state);
 
                 // feed model backward, storing grads in uninit state
                 self.model

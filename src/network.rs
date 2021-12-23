@@ -36,16 +36,10 @@ where
         self.1.output_shape()
     }
 
-    fn view<'a, F>(&self, data: &'a [F]) -> Self::State<ndarray::ViewRepr<&'a F>> {
+    fn view<S: crate::Slice>(&self, data: S) -> Self::State<S::Repr> {
         let i = self.0.size();
-        let data = data.split_at(i);
+        let data = data.split(i);
         (self.0.view(data.0), self.1.view(data.1))
-    }
-
-    fn view_mut<'a, F>(&self, data: &'a mut [F]) -> Self::State<ndarray::ViewRepr<&'a mut F>> {
-        let i = self.0.size();
-        let data = data.split_at_mut(i);
-        (self.0.view_mut(data.0), self.1.view_mut(data.1))
     }
 
     fn apply<F: Scalar>(

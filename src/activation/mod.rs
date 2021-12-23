@@ -40,8 +40,7 @@ impl<A: Activation> Layer for ActivationLayer<A> {
         self.shape.clone()
     }
 
-    fn view<'a, F>(&self, _data: &'a [F]) -> Self::State<ndarray::ViewRepr<&'a F>> {}
-    fn view_mut<'a, F>(&self, _data: &'a mut [F]) -> Self::State<ndarray::ViewRepr<&'a mut F>> {}
+    fn view<S: crate::Slice>(&self, _data: S) -> Self::State<S::Repr> {}
 
     fn apply<F: crate::Scalar>(
         &self,

@@ -1,18 +1,17 @@
-use ndarray::{ArrayBase, Data, Dimension, OwnedRepr};
-
-use crate::Scalar;
+use crate::{Arr, OwnedArr, Scalar};
+use ndarray::{Data, Dimension};
 
 pub mod mse;
 
 pub trait Cost<D: Dimension> {
     fn cost<F: Scalar>(
         &self,
-        output: ArrayBase<impl Data<Elem = F>, D::Larger>,
-        expected: ArrayBase<impl Data<Elem = F>, D::Larger>,
+        output: Arr<impl Data<Elem = F>, D>,
+        expected: Arr<impl Data<Elem = F>, D>,
     ) -> F;
     fn diff<F: Scalar>(
         &self,
-        output: ArrayBase<impl Data<Elem = F>, D::Larger>,
-        expected: ArrayBase<impl Data<Elem = F>, D::Larger>,
-    ) -> ArrayBase<OwnedRepr<F>, D::Larger>;
+        output: Arr<impl Data<Elem = F>, D>,
+        expected: Arr<impl Data<Elem = F>, D>,
+    ) -> OwnedArr<F, D>;
 }

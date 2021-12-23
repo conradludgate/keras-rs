@@ -4,10 +4,8 @@
 use std::{mem::MaybeUninit, ops::Neg};
 
 use model::{fill, Model};
-use ndarray::{
-    ArrayBase, Data, Dimension, IntoDimension, LinalgScalar, OwnedRepr, RawData, ScalarOperand,
-    ViewRepr,
-};
+use named::Named;
+use ndarray::{Data, Dimension, IntoDimension, LinalgScalar, RawData, ScalarOperand, ViewRepr, ArrayBase};
 use rand::{thread_rng, Rng};
 use rand_distr::num_traits::{Float, FromPrimitive};
 
@@ -15,16 +13,18 @@ pub mod activation;
 pub mod cost;
 pub mod linear;
 pub mod model;
+pub mod named;
 pub mod network;
 pub mod optimise;
 
 /// Type representing a simple ArrayBase, but dimension larger to account for batches
-pub type Arr<S, D> = ArrayBase<S, <D as Dimension>::Larger>;
+pub type Arr<S, D> = ndarray::ArrayBase<S, <D as Dimension>::Larger>;
 pub type UninitRepr<'f, F> = ViewRepr<&'f mut MaybeUninit<F>>;
+pub type MutRepr<'f, F> = ViewRepr<&'f mut F>;
 pub type UninitArr<'f, F, D> = Arr<UninitRepr<'f, F>, D>;
-pub type OwnedArr<F, D> = Arr<OwnedRepr<F>, D>;
+pub type OwnedArr<F, D> = Arr<ndarray::OwnedRepr<F>, D>;
 pub type ArrView<'a, F, D> = Arr<ViewRepr<&'a F>, D>;
-pub type ArrViewMut<'a, F, D> = Arr<ViewRepr<&'a mut F>, D>;
+pub type ArrViewMut<'a, F, D> = Arr<MutRepr<'a, F>, D>;
 
 /// An abstract representation of a Computation Graph.
 pub trait GraphBuilder: Sized {
@@ -50,12 +50,16 @@ pub trait GraphBuilder: Sized {
 
         unsafe {
             fill(&mut data, len, |data| {
-                let mut uninit = layer.view_mut(data);
+                let mut uninit = layer.view(data);
                 layer.init(&mut thread_rng(), &mut uninit);
             });
         }
 
         Model { layer, data }
+    }
+
+    fn named<S: ToString>(self, name: S) -> Named<Self, S> {
+        Named { inner: self, name }
     }
 }
 
@@ -68,6 +72,34 @@ impl<S> Scalar for S where
 {
 }
 
+pub trait Slice: Sized {
+    type Repr: RawData;
+    fn split(self, at: usize) -> (Self, Self);
+    fn into_array<D: IntoDimension>(self, shape: D) -> ArrayBase<Self::Repr, D::Dim>;
+}
+
+impl<'a, T> Slice for &'a mut [T] {
+    type Repr = ViewRepr<&'a mut T>;
+    fn split(self, at: usize) -> (Self, Self) {
+        self.split_at_mut(at)
+    }
+
+    fn into_array<D: IntoDimension>(self, shape: D) -> ArrayBase<Self::Repr, D::Dim> {
+        ndarray::ArrayViewMut::from_shape(shape, self).unwrap()
+    }
+}
+
+impl<'a, T> Slice for &'a [T] {
+    type Repr = ViewRepr<&'a T>;
+    fn split(self, at: usize) -> (Self, Self) {
+        self.split_at(at)
+    }
+
+    fn into_array<D: IntoDimension>(self, shape: D) -> ArrayBase<Self::Repr, D::Dim> {
+        ndarray::ArrayView::from_shape(shape, self).unwrap()
+    }
+}
+
 pub trait Layer {
     type InputShape: Dimension;
     type OutputShape: Dimension;
@@ -76,8 +108,7 @@ pub trait Layer {
     fn size(&self) -> usize;
     fn output_shape(&self) -> Self::OutputShape;
 
-    fn view<'a, F>(&self, data: &'a [F]) -> Self::State<ViewRepr<&'a F>>;
-    fn view_mut<'a, F>(&self, data: &'a mut [F]) -> Self::State<ViewRepr<&'a mut F>>;
+    fn view<S: Slice>(&self, data: S) -> Self::State<S::Repr>;
 
     fn apply<F: Scalar>(
         &self,
@@ -89,7 +120,7 @@ pub trait Layer {
 /// # Safety
 /// init should initialise all values in the state
 pub unsafe trait Initialise<F: Scalar>: Layer {
-    fn init(&self, rng: &mut impl Rng, state: &mut Self::State<ViewRepr<&mut MaybeUninit<F>>>);
+    fn init(&self, rng: &mut impl Rng, state: &mut Self::State<UninitRepr<F>>);
 }
 
 pub trait TrainableLayer: Layer {
