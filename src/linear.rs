@@ -2,7 +2,7 @@ use std::mem::MaybeUninit;
 
 use ndarray::{
     linalg::general_mat_mul, ArrayBase, ArrayView, ArrayViewMut, Axis, Data, Dimension,
-    IntoDimension, Ix1, Ix2, RawData, ShapeError, ViewRepr,
+    IntoDimension, Ix1, Ix2, RawData, ViewRepr,
 };
 use rand::Rng;
 use rand_distr::{Distribution, Normal, StandardNormal};
@@ -57,27 +57,24 @@ impl crate::Layer for Layer {
         self.output_shape
     }
 
-    fn view<'a, F>(&self, data: &'a [F]) -> Result<Self::State<ViewRepr<&'a F>>, ShapeError> {
+    fn view<'a, F>(&self, data: &'a [F]) -> Self::State<ViewRepr<&'a F>> {
         let i = self.input_shape.into_pattern();
         let o = self.output_shape.into_pattern();
 
         let (weights, biases) = data.split_at(i * o);
-        let weights = ArrayView::from_shape([i, o], weights)?;
-        let biases = ArrayView::from_shape(o, biases)?;
-        Ok(LinearState { weights, biases })
+        let weights = ArrayView::from_shape([i, o], weights).unwrap();
+        let biases = ArrayView::from_shape(o, biases).unwrap();
+        LinearState { weights, biases }
     }
 
-    fn view_mut<'a, F>(
-        &self,
-        data: &'a mut [F],
-    ) -> Result<Self::State<ViewRepr<&'a mut F>>, ShapeError> {
+    fn view_mut<'a, F>(&self, data: &'a mut [F]) -> Self::State<ViewRepr<&'a mut F>> {
         let i = self.input_shape.into_pattern();
         let o = self.output_shape.into_pattern();
 
         let (weights, biases) = data.split_at_mut(i * o);
-        let weights = ArrayViewMut::from_shape([i, o], weights)?;
-        let biases = ArrayViewMut::from_shape(o, biases)?;
-        Ok(LinearState { weights, biases })
+        let weights = ArrayViewMut::from_shape([i, o], weights).unwrap();
+        let biases = ArrayViewMut::from_shape(o, biases).unwrap();
+        LinearState { weights, biases }
     }
 
     fn apply<F: Scalar>(

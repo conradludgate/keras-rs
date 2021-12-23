@@ -36,22 +36,16 @@ where
         self.1.output_shape()
     }
 
-    fn view<'a, F>(
-        &self,
-        data: &'a [F],
-    ) -> Result<Self::State<ndarray::ViewRepr<&'a F>>, ndarray::ShapeError> {
+    fn view<'a, F>(&self, data: &'a [F]) -> Self::State<ndarray::ViewRepr<&'a F>> {
         let i = self.0.size();
         let data = data.split_at(i);
-        Ok((self.0.view(data.0)?, self.1.view(data.1)?))
+        (self.0.view(data.0), self.1.view(data.1))
     }
 
-    fn view_mut<'a, F>(
-        &self,
-        data: &'a mut [F],
-    ) -> Result<Self::State<ndarray::ViewRepr<&'a mut F>>, ndarray::ShapeError> {
+    fn view_mut<'a, F>(&self, data: &'a mut [F]) -> Self::State<ndarray::ViewRepr<&'a mut F>> {
         let i = self.0.size();
         let data = data.split_at_mut(i);
-        Ok((self.0.view_mut(data.0)?, self.1.view_mut(data.1)?))
+        (self.0.view_mut(data.0), self.1.view_mut(data.1))
     }
 
     fn apply<F: Scalar>(

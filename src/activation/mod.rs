@@ -40,19 +40,8 @@ impl<A: Activation> Layer for ActivationLayer<A> {
         self.shape.clone()
     }
 
-    fn view<'a, F>(
-        &self,
-        _data: &'a [F],
-    ) -> Result<Self::State<ndarray::ViewRepr<&'a F>>, ndarray::ShapeError> {
-        Ok(())
-    }
-
-    fn view_mut<'a, F>(
-        &self,
-        _data: &'a mut [F],
-    ) -> Result<Self::State<ndarray::ViewRepr<&'a mut F>>, ndarray::ShapeError> {
-        Ok(())
-    }
+    fn view<'a, F>(&self, _data: &'a [F]) -> Self::State<ndarray::ViewRepr<&'a F>> {}
+    fn view_mut<'a, F>(&self, _data: &'a mut [F]) -> Self::State<ndarray::ViewRepr<&'a mut F>> {}
 
     fn apply<F: crate::Scalar>(
         &self,

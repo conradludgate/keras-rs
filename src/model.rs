@@ -15,9 +15,7 @@ pub struct Model<F: Scalar, G: GraphBuilder> {
 
 impl<F: Scalar, G: GraphBuilder> Model<F, G> {
     fn state(&self) -> <G::Layer as Layer>::State<ViewRepr<&'_ F>> {
-        self.layer
-            .view(&self.data)
-            .expect("size of data should always be a valid view into a layer")
+        self.layer.view(&self.data)
     }
 
     pub fn apply(
@@ -228,7 +226,7 @@ where
         // Train Layer backward should initialise every value
         unsafe {
             fill(gradiants_buf, self.model.layer.size(), |d_state| {
-                let d_state = self.model.layer.view_mut(d_state).unwrap();
+                let d_state = self.model.layer.view_mut(d_state);
 
                 // feed model backward, storing grads in uninit state
                 self.model
@@ -243,7 +241,7 @@ where
 /// # Safety
 /// f should initialise every value in the slice for this to be safe
 /// otherwise there will be live uninitialised data
-unsafe fn fill<T, O>(
+pub(crate) unsafe fn fill<T, O>(
     buf: &mut Vec<T>,
     n: usize,
     f: impl FnOnce(&mut [MaybeUninit<T>]) -> O,

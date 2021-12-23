@@ -3,10 +3,10 @@
 
 use std::{mem::MaybeUninit, ops::Neg};
 
-use model::Model;
+use model::{fill, Model};
 use ndarray::{
     ArrayBase, Data, Dimension, IntoDimension, LinalgScalar, OwnedRepr, RawData, ScalarOperand,
-    ShapeError, ViewRepr,
+    ViewRepr,
 };
 use rand::{thread_rng, Rng};
 use rand_distr::num_traits::{Float, FromPrimitive};
@@ -47,13 +47,12 @@ pub trait GraphBuilder: Sized {
         let len = layer.size();
 
         let mut data = Vec::with_capacity(len);
-        let mut uninit = layer
-            .view_mut(&mut data.spare_capacity_mut()[..len])
-            .unwrap();
-        layer.init(&mut thread_rng(), &mut uninit);
-        drop(uninit);
+
         unsafe {
-            data.set_len(len);
+            fill(&mut data, len, |data| {
+                let mut uninit = layer.view_mut(data);
+                layer.init(&mut thread_rng(), &mut uninit);
+            });
         }
 
         Model { layer, data }
@@ -77,11 +76,8 @@ pub trait Layer {
     fn size(&self) -> usize;
     fn output_shape(&self) -> Self::OutputShape;
 
-    fn view<'a, F>(&self, data: &'a [F]) -> Result<Self::State<ViewRepr<&'a F>>, ShapeError>;
-    fn view_mut<'a, F>(
-        &self,
-        data: &'a mut [F],
-    ) -> Result<Self::State<ViewRepr<&'a mut F>>, ShapeError>;
+    fn view<'a, F>(&self, data: &'a [F]) -> Self::State<ViewRepr<&'a F>>;
+    fn view_mut<'a, F>(&self, data: &'a mut [F]) -> Self::State<ViewRepr<&'a mut F>>;
 
     fn apply<F: Scalar>(
         &self,
