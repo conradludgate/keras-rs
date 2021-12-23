@@ -12,7 +12,6 @@ use rand::{thread_rng, Rng};
 use rand_distr::num_traits::{Float, FromPrimitive};
 
 pub mod activation;
-pub(crate) mod array;
 pub mod cost;
 pub mod linear;
 pub mod model;
@@ -23,6 +22,8 @@ pub type Arr<S, D> = ArrayBase<S, <D as Dimension>::Larger>;
 pub type UninitRepr<'f, F> = ViewRepr<&'f mut MaybeUninit<F>>;
 pub type UninitArr<'f, F, D> = Arr<UninitRepr<'f, F>, D>;
 pub type OwnedArr<F, D> = Arr<OwnedRepr<F>, D>;
+pub type ArrView<'a, F, D> = Arr<ViewRepr<&'a F>, D>;
+pub type ArrViewMut<'a, F, D> = Arr<ViewRepr<&'a mut F>, D>;
 
 /// An abstract representation of a Computation Graph.
 pub trait GraphBuilder: Sized {
@@ -79,8 +80,7 @@ pub trait Layer {
         &self,
         state: Self::State<ViewRepr<&F>>,
         input: Arr<impl Data<Elem = F>, Self::InputShape>,
-        output: UninitArr<F, Self::OutputShape>
-    );
+    ) -> OwnedArr<F, Self::OutputShape>;
 }
 
 /// # Safety
@@ -90,22 +90,20 @@ pub unsafe trait Initialise<F: Scalar>: Layer {
 }
 
 pub trait TrainableLayer: Layer {
-    fn train_state_size(&self) -> usize;
+    fn train_state_size(&self, batch_size: usize) -> usize;
 
     fn forward<F: Scalar>(
         &self,
         state: Self::State<ViewRepr<&F>>,
         input: Arr<impl Data<Elem = F>, Self::InputShape>,
-        output: UninitArr<F, Self::OutputShape>,
         train_state: &mut [MaybeUninit<F>],
-    );
+    ) -> OwnedArr<F, Self::OutputShape>;
 
     fn backward<F: Scalar>(
         &self,
         state: Self::State<ViewRepr<&F>>,
         d_state: Self::State<UninitRepr<F>>,
-        d_input: UninitArr<F, Self::OutputShape>,
         train_state: &[F],
         d_output: Arr<impl Data<Elem = F>, Self::OutputShape>,
-    );
+    ) -> OwnedArr<F, Self::InputShape>;
 }

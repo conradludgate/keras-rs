@@ -1,6 +1,6 @@
 use ndarray::{ArrayBase, Data, Dimension, OwnedRepr};
 
-use crate::{GraphBuilder, Initialise, Layer, TrainableLayer, Scalar};
+use crate::{GraphBuilder, Initialise, Layer, Scalar, OwnedArr, Arr};
 
 pub mod relu;
 
@@ -8,19 +8,8 @@ pub trait Activation {
     type Shape: Dimension + Clone;
 
     fn apply<F: crate::Scalar>(
-        input: ArrayBase<impl Data<Elem = F>, <Self::Shape as Dimension>::Larger>,
-    ) -> ArrayBase<OwnedRepr<F>, <Self::Shape as Dimension>::Larger>;
-}
-
-pub trait ActivationTrain: Activation {
-    fn backward<F: crate::Scalar>(
-        input: ArrayBase<impl Data<Elem = F>, <<Self as Activation>::Shape as Dimension>::Larger>,
-        output: ArrayBase<impl Data<Elem = F>, <<Self as Activation>::Shape as Dimension>::Larger>,
-        d_output: ArrayBase<
-            impl Data<Elem = F>,
-            <<Self as Activation>::Shape as Dimension>::Larger,
-        >,
-    ) -> ArrayBase<OwnedRepr<F>, <<Self as Activation>::Shape as Dimension>::Larger>;
+        input: Arr<impl Data<Elem= F>, Self::Shape>,
+    ) -> OwnedArr<F, Self::Shape>;
 }
 
 impl<A: Activation> GraphBuilder for A {
@@ -80,21 +69,5 @@ unsafe impl<F: Scalar, A: Activation> Initialise<F> for ActivationLayer<A> {
         state: &mut Self::State<ndarray::ViewRepr<&mut std::mem::MaybeUninit<F>>>,
     ) {
         debug_assert_eq!(std::mem::size_of_val(state), 0);
-    }
-}
-
-impl<A: ActivationTrain> TrainableLayer for ActivationLayer<A> {
-    fn backward<F: crate::Scalar>(
-        &self,
-        _state: Self::State<ndarray::ViewRepr<&F>>,
-        _d_state: Self::State<ndarray::ViewRepr<&mut F>>,
-        input: ArrayBase<impl Data<Elem = F>, <<Self as Layer>::InputShape as Dimension>::Larger>,
-        output: ArrayBase<impl Data<Elem = F>, <<Self as Layer>::OutputShape as Dimension>::Larger>,
-        d_output: ArrayBase<
-            impl Data<Elem = F>,
-            <<Self as Layer>::OutputShape as Dimension>::Larger,
-        >,
-    ) -> ArrayBase<OwnedRepr<F>, <<Self as Layer>::InputShape as Dimension>::Larger> {
-        A::backward(input, output, d_output)
     }
 }

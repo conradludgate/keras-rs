@@ -1,7 +1,8 @@
 mod parse;
 
 use keras_rs::{
-    activation::relu::Relu, cost::mse::MSE, linear, net, optimise::adam::Adam, GraphBuilder,
+    activation::relu::Relu, cost::mse::MSE, linear, model::ModelTrainer, net, optimise::adam::Adam,
+    GraphBuilder,
 };
 use ndarray::{Array2, AssignElem};
 
@@ -22,37 +23,24 @@ fn main() {
         Relu
     ];
 
-    let model = network.into_model(28*28);
+    let model = network.into_model(28 * 28);
 
-    let optimiser = Adam::<f64>::new(0.001, 0.9, 0.99, 1e-8);
-    let model = network
-        .build_model()
-        .input_shape(28 * 28)
-        .with_cost(MSE)
-        .with_optimiser(optimiser)
-        .initialise();
+    let optimiser = Adam::new(0.001, 0.9, 0.99, 1e-8);
+    let mut trainer = ModelTrainer {
+        model,
+        optimiser,
+        cost: MSE,
+    };
 
+    let mut costs = vec![];
 
-    // let mut trainer = Train::new(network, MSE, SGD::new(0.01));
+    const BATCH_SIZE: usize = 120;
 
-    // let mut trainer = Train {
-    //     graph,
-    //     optimiser,
-    //     cost: MSE,
-    //     regularisation: Some(Regularisation::L2(0.01)),
-    //     dropout: 0.2,
-    // };
+    for _ in 0..20 {
+        let cost = trainer.train_epoch(training_data.0.view(), training_data.1.view(), BATCH_SIZE);
 
-    // let mut costs = vec![];
-
-    // const BATCH_SIZE: usize = 120;
-
-    // for _ in 0..20 {
-    //     let cost =
-    //         trainer.perform_epoch(&training_data.0.view(), &training_data.1.view(), BATCH_SIZE);
-
-    //     costs.push(dbg!(cost));
-    // }
+        costs.push(dbg!(cost));
+    }
 
     // let graph = trainer.graph;
 

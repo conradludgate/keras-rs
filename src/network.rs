@@ -1,7 +1,6 @@
-use ndarray::Dimension;
 use rand::Rng;
 
-use crate::{GraphBuilder, Initialise, Layer, Scalar, TrainableLayer};
+use crate::{Arr, GraphBuilder, Initialise, Layer, Scalar, TrainableLayer};
 
 impl<G1, G2> GraphBuilder for (G1, G2)
 where
@@ -55,17 +54,11 @@ where
         Ok((self.0.view_mut(data.0)?, self.1.view_mut(data.1)?))
     }
 
-    fn apply<F: crate::Scalar>(
+    fn apply<F: Scalar>(
         &self,
         state: Self::State<ndarray::ViewRepr<&F>>,
-        input: ndarray::ArrayBase<
-            impl ndarray::Data<Elem = F>,
-            <<Self as Layer>::InputShape as Dimension>::Larger,
-        >,
-    ) -> ndarray::ArrayBase<
-        ndarray::OwnedRepr<F>,
-        <<Self as Layer>::OutputShape as Dimension>::Larger,
-    > {
+        input: Arr<impl ndarray::Data<Elem = F>, Self::InputShape>,
+    ) -> crate::OwnedArr<F, Self::OutputShape> {
         let inner = self.0.apply(state.0, input);
         self.1.apply(state.1, inner)
     }
@@ -76,7 +69,11 @@ where
     L1: Layer + Initialise<F>,
     L2: Layer<InputShape = L1::OutputShape> + Initialise<F>,
 {
-    fn init(&self, rng: &mut impl Rng, state: &mut Self::State<ndarray::ViewRepr<&mut std::mem::MaybeUninit<F>>>) {
+    fn init(
+        &self,
+        rng: &mut impl Rng,
+        state: &mut Self::State<ndarray::ViewRepr<&mut std::mem::MaybeUninit<F>>>,
+    ) {
         self.0.init(rng, &mut state.0);
         self.1.init(rng, &mut state.1);
     }
@@ -87,20 +84,34 @@ where
     L1: TrainableLayer,
     L2: TrainableLayer + Layer<InputShape = L1::OutputShape>,
 {
-    fn
+    fn train_state_size(&self, batch_size: usize) -> usize {
+        self.0.train_state_size(batch_size) + self.1.train_state_size(batch_size)
+    }
+
+    fn forward<F: Scalar>(
+        &self,
+        state: Self::State<ndarray::ViewRepr<&F>>,
+        input: Arr<impl ndarray::Data<Elem = F>, Self::InputShape>,
+        train_state: &mut [std::mem::MaybeUninit<F>],
+    ) -> crate::OwnedArr<F, Self::OutputShape> {
+        let bs = input.shape()[0];
+        let (ts0, ts1) = train_state.split_at_mut(self.0.train_state_size(bs));
+
+        let o0 = self.0.forward(state.0, input, ts0);
+        self.1.forward(state.1, o0, ts1)
+    }
 
     fn backward<F: Scalar>(
         &self,
         state: Self::State<ndarray::ViewRepr<&F>>,
-        d_state: Self::State<ndarray::ViewRepr<&mut std::mem::MaybeUninit<F>>>,
-        input: Arr<impl ndarray::Data<Elem = F>, Self::InputShape>,
-        d_input: Arr<ndarray::ViewRepr<&mut std::mem::MaybeUninit<F>>, Self::InputShape>,
-        output: Arr<impl ndarray::Data<Elem = F>, Self::OutputShape>,
+        d_state: Self::State<crate::UninitRepr<F>>,
+        train_state: &[F],
         d_output: Arr<impl ndarray::Data<Elem = F>, Self::OutputShape>,
-    ) -> Arr<ndarray::OwnedRepr<F>, Self::InputShape> {
-
-        let di = self.1.backward(state.1, d_state.1, input, output, d_output);
-        self.0.backward(state.1, d_state.0, input, output, di)
+    ) -> crate::OwnedArr<F, Self::InputShape> {
+        let bs = d_output.shape()[0];
+        let (ts0, ts1) = train_state.split_at(self.0.train_state_size(bs));
+        let d_output = self.1.backward(state.1, d_state.1, ts1, d_output);
+        self.0.backward(state.0, d_state.0, ts0, d_output)
     }
 }
 
