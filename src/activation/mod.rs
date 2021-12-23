@@ -1,6 +1,6 @@
 use ndarray::{ArrayBase, Data, Dimension, OwnedRepr};
 
-use crate::{GraphBuilder, Initialise, Layer, Scalar, OwnedArr, Arr};
+use crate::{Arr, GraphBuilder, Initialise, Layer, OwnedArr, Scalar};
 
 pub mod relu;
 pub mod sigmoid;
@@ -9,7 +9,7 @@ pub trait Activation {
     type Shape: Dimension + Clone;
 
     fn apply<F: crate::Scalar>(
-        input: Arr<impl Data<Elem= F>, Self::Shape>,
+        input: Arr<impl Data<Elem = F>, Self::Shape>,
     ) -> OwnedArr<F, Self::Shape>;
 }
 

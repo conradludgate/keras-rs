@@ -1,10 +1,15 @@
 mod parse;
 
 use keras_rs::{
-    activation::{relu::Relu, sigmoid::Sigmoid}, cost::mse::MSE, linear, model::Trainer, net, optimise::adam::Adam,
+    activation::{relu::Relu, sigmoid::Sigmoid},
+    cost::mse::MSE,
+    linear,
+    model::{Regularisation, Trainer},
+    net,
+    optimise::adam::Adam,
     GraphBuilder,
 };
-use ndarray::{Array2, AssignElem};
+use ndarray::{Array2, AssignElem, Axis};
 
 fn main() {
     // Load MNIST data set
@@ -30,7 +35,9 @@ fn main() {
         model,
         optimiser,
         cost: MSE,
-    }.build();
+        regularisation: Some(Regularisation::L2(0.01)),
+    }
+    .build();
 
     let mut costs = vec![];
 
@@ -50,12 +57,14 @@ fn main() {
 
     // // println!("network: {:?}", network);
 
-    // let input = training_data.0.index_axis(Axis(0), 0);
-    // let expected = training_data.1.index_axis(Axis(0), 0);
+    let input = training_data.0.index_axis(Axis(0), 0);
+    let expected = training_data.1.index_axis(Axis(0), 0);
 
-    // let output = graph.exec(input);
-    // println!("output: {:?}", output);
-    // println!("expected: {:?}", expected);
+    let output = trainer
+        .as_model()
+        .apply(input.into_shape((1, 28 * 28)).unwrap());
+    println!("output: {:?}", output);
+    println!("expected: {:?}", expected);
 }
 
 fn process_data(data: &parse::DataSet) -> (Array2<f32>, Array2<f32>) {

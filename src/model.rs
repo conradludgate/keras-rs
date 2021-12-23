@@ -35,6 +35,7 @@ where
     pub model: Model<F, G>,
     pub optimiser: O,
     pub cost: C,
+    pub regularisation: Option<Regularisation<F>>,
 }
 
 pub struct ModelTrainer<F: Scalar, G: GraphBuilder, O: Optimiser<F>, C: Cost<G::OutputShape>>
@@ -73,6 +74,14 @@ where
     ) -> F {
         self.trainer
             .train_epoch(input, expected, batch_size, &mut self.bufs)
+    }
+
+    pub fn into_inner(self) -> Trainer<F, G, O, C> {
+        self.trainer
+    }
+
+    pub fn as_model(&self) -> &Model<F, G> {
+        &self.trainer.model
     }
 }
 
@@ -178,8 +187,11 @@ where
 
         let grads = self.batch_backward(d_output, train_state, gradiants_buf);
 
-        self.optimiser.optimise(&mut self.model.data, grads);
+        if let Some(r) = self.regularisation {
+            r.apply(grads, &self.model.data);
+        }
 
+        self.optimiser.optimise(&mut self.model.data, grads);
         self.cost.cost(output, expected)
     }
 
@@ -187,7 +199,7 @@ where
         &mut self,
         input: Arr<impl Data<Elem = F>, G::InputShape>,
         train_state_buf: &'a mut Vec<F>,
-    ) -> (OwnedArr<F, G::OutputShape>, &'a [F]) {
+    ) -> (OwnedArr<F, G::OutputShape>, &'a mut [F]) {
         // allocate space and get uninit slice
         let train_state_size = self.model.layer.train_state_size(input.shape()[0]);
         train_state_buf.clear();
@@ -208,7 +220,7 @@ where
         d_output: Arr<impl Data<Elem = F>, G::OutputShape>,
         train_state: &[F],
         gradiants_buf: &'a mut Vec<F>,
-    ) -> &'a [F] {
+    ) -> &'a mut [F] {
         // allocate space and get uninit state
         gradiants_buf.clear();
 
@@ -235,7 +247,7 @@ unsafe fn fill<T, O>(
     buf: &mut Vec<T>,
     n: usize,
     f: impl FnOnce(&mut [MaybeUninit<T>]) -> O,
-) -> (O, &[T]) {
+) -> (O, &mut [T]) {
     buf.reserve(n);
     let uninit = &mut buf.spare_capacity_mut()[..n];
 
@@ -243,7 +255,7 @@ unsafe fn fill<T, O>(
 
     let len = buf.len();
     buf.set_len(len + n);
-    (output, &buf[len..])
+    (output, &mut buf[len..])
 }
 
 /// # Safety
@@ -263,4 +275,28 @@ unsafe fn fill2<T, O1, O2>(
 
     let (s1, s2) = s.split_at(n1);
     (o1, o2, s1, s2)
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum Regularisation<F> {
+    L1(F),
+    L2(F),
+    L1_2(F, F),
+}
+
+impl<F: Scalar> Regularisation<F> {
+    fn apply(self, grads: &mut [F], graph: &[F]) {
+        let zip = grads.iter_mut().zip(graph);
+        match self {
+            Regularisation::L1(a) => zip.for_each(|(g, &t)| {
+                *g = *g + t.signum() * a;
+            }),
+            Regularisation::L2(a) => zip.for_each(|(g, &t)| {
+                *g = *g + (t + t) * a;
+            }),
+            Regularisation::L1_2(a, b) => zip.for_each(|(g, &t)| {
+                *g = *g + t.signum() * a + (t + t) * b;
+            }),
+        }
+    }
 }
