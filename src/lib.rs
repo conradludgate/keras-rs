@@ -1,7 +1,7 @@
 #![feature(generic_associated_types)]
 #![feature(vec_spare_capacity)]
 
-use std::mem::MaybeUninit;
+use std::{mem::MaybeUninit, ops::Neg};
 
 use model::Model;
 use ndarray::{
@@ -60,8 +60,14 @@ pub trait GraphBuilder: Sized {
     }
 }
 
-pub trait Scalar: LinalgScalar + ScalarOperand + Float + FromPrimitive + std::fmt::Debug {}
-impl<S> Scalar for S where S: LinalgScalar + ScalarOperand + Float + FromPrimitive + std::fmt::Debug {}
+pub trait Scalar:
+    LinalgScalar + ScalarOperand + Float + FromPrimitive + Neg<Output = Self> + std::fmt::Debug
+{
+}
+impl<S> Scalar for S where
+    S: LinalgScalar + ScalarOperand + Float + FromPrimitive + Neg<Output = S> + std::fmt::Debug
+{
+}
 
 pub trait Layer {
     type InputShape: Dimension;

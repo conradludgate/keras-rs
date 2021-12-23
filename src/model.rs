@@ -1,3 +1,5 @@
+use std::mem::MaybeUninit;
+
 use ndarray::{ArrayView, ArrayViewMut, Axis, Data, Dimension, ViewRepr};
 use rand::{prelude::SliceRandom, thread_rng};
 
@@ -126,28 +128,32 @@ where
         let mut expected_dim = expected.raw_dim();
         expected_dim.as_array_view_mut()[0] = indices.len();
 
-        data_buf.clear();
-        data_buf.reserve(input_dim.size() + expected_dim.size());
-        let uninit = &mut data_buf.spare_capacity_mut()[..input_dim.size() + expected_dim.size()];
-        let (uninit_input, uninit_expected) = uninit.split_at_mut(input_dim.size());
+        let ((_, input), (_, expected)) = unsafe {
+            fill2(
+                data_buf,
+                input_dim.size(),
+                expected_dim.size(),
+                |input_batch| {
+                    let mut input_batch =
+                        ArrayViewMut::from_shape(input_dim.clone(), input_batch).unwrap();
 
-        let mut uninit_input = ArrayViewMut::from_shape(input_dim.clone(), uninit_input).unwrap();
-        let mut uninit_expected =
-            ArrayViewMut::from_shape(expected_dim.clone(), uninit_expected).unwrap();
+                    input_batch
+                        .axis_iter_mut(Axis(0))
+                        .zip(indices)
+                        .for_each(|(i, &j)| input.index_axis(Axis(0), j).assign_to(i));
+                },
+                |expected_batch| {
+                    let mut expected_batch =
+                        ArrayViewMut::from_shape(expected_dim.clone(), expected_batch).unwrap();
 
-        for (i, &j) in indices.iter().enumerate() {
-            input
-                .index_axis(Axis(0), j)
-                .assign_to(uninit_input.index_axis_mut(Axis(0), i));
+                    expected_batch
+                        .axis_iter_mut(Axis(0))
+                        .zip(indices)
+                        .for_each(|(i, &j)| expected.index_axis(Axis(0), j).assign_to(i));
+                },
+            )
+        };
 
-            expected
-                .index_axis(Axis(0), j)
-                .assign_to(uninit_expected.index_axis_mut(Axis(0), i));
-        }
-
-        unsafe { data_buf.set_len(input_dim.size() + expected_dim.size()) }
-
-        let (input, expected) = data_buf.split_at_mut(input_dim.size());
         let input = ArrayView::from_shape(input_dim, input).unwrap();
         let expected = ArrayView::from_shape(expected_dim, expected).unwrap();
         (input, expected)
@@ -185,22 +191,16 @@ where
         // allocate space and get uninit slice
         let train_state_size = self.model.layer.train_state_size(input.shape()[0]);
         train_state_buf.clear();
-        train_state_buf.reserve(train_state_size);
-        let train_state = &mut train_state_buf.spare_capacity_mut()[..train_state_size];
-
-        // feed model forward, storing train state in uninit slice
-        let output = self
-            .model
-            .layer
-            .forward(self.model.state(), input, train_state);
 
         // # Safety
         // Train Layer forward should initialise every value
         unsafe {
-            train_state_buf.set_len(train_state_size);
+            fill(train_state_buf, train_state_size, |train_state| {
+                self.model
+                    .layer
+                    .forward(self.model.state(), input, train_state)
+            })
         }
-
-        (output, train_state_buf.as_slice())
     }
 
     fn batch_backward<'a>(
@@ -211,21 +211,56 @@ where
     ) -> &'a [F] {
         // allocate space and get uninit state
         gradiants_buf.clear();
-        gradiants_buf.reserve(self.model.layer.size());
-        let d_state = &mut gradiants_buf.spare_capacity_mut()[..self.model.layer.size()];
-        let d_state = self.model.layer.view_mut(d_state).unwrap();
-
-        // feed model backward, storing grads in uninit state
-        self.model
-            .layer
-            .backward(self.model.state(), d_state, train_state, d_output);
 
         // # Safety
         // Train Layer backward should initialise every value
         unsafe {
-            gradiants_buf.set_len(self.model.layer.size());
-        }
+            fill(gradiants_buf, self.model.layer.size(), |d_state| {
+                let d_state = self.model.layer.view_mut(d_state).unwrap();
 
-        gradiants_buf.as_slice()
+                // feed model backward, storing grads in uninit state
+                self.model
+                    .layer
+                    .backward(self.model.state(), d_state, train_state, d_output)
+            })
+            .1
+        }
     }
+}
+
+/// # Safety
+/// f should initialise every value in the slice for this to be safe
+/// otherwise there will be live uninitialised data
+unsafe fn fill<T, O>(
+    buf: &mut Vec<T>,
+    n: usize,
+    f: impl FnOnce(&mut [MaybeUninit<T>]) -> O,
+) -> (O, &[T]) {
+    buf.reserve(n);
+    let uninit = &mut buf.spare_capacity_mut()[..n];
+
+    let output = f(uninit);
+
+    let len = buf.len();
+    buf.set_len(len + n);
+    (output, &buf[len..])
+}
+
+/// # Safety
+/// f should initialise every value in the slice for this to be safe
+/// otherwise there will be live uninitialised data
+unsafe fn fill2<T, O1, O2>(
+    buf: &mut Vec<T>,
+    n1: usize,
+    n2: usize,
+    f1: impl FnOnce(&mut [MaybeUninit<T>]) -> O1,
+    f2: impl FnOnce(&mut [MaybeUninit<T>]) -> O2,
+) -> ((O1, &[T]), (O2, &[T])) {
+    let ((o1, o2), s) = fill(buf, n1 + n2, |s| {
+        let (s1, s2) = s.split_at_mut(n1);
+        (f1(s1), f2(s2))
+    });
+
+    let (s1, s2) = s.split_at(n1);
+    ((o1, s1), (o2, s2))
 }

@@ -1,7 +1,7 @@
 mod parse;
 
 use keras_rs::{
-    activation::relu::Relu, cost::mse::MSE, linear, model::Trainer, net, optimise::adam::Adam,
+    activation::{relu::Relu, sigmoid::Sigmoid}, cost::mse::MSE, linear, model::Trainer, net, optimise::adam::Adam,
     GraphBuilder,
 };
 use ndarray::{Array2, AssignElem};
@@ -20,7 +20,7 @@ fn main() {
         linear::Layer::output(16),
         Relu,
         linear::Layer::output(10),
-        Relu
+        Sigmoid
     ];
 
     let model = network.into_model(28 * 28);

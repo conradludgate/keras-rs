@@ -3,6 +3,7 @@ use ndarray::{ArrayBase, Data, Dimension, OwnedRepr};
 use crate::{GraphBuilder, Initialise, Layer, Scalar, OwnedArr, Arr};
 
 pub mod relu;
+pub mod sigmoid;
 
 pub trait Activation {
     type Shape: Dimension + Clone;
