@@ -1,6 +1,6 @@
-use ndarray::{ArrayView, ArrayViewMut, Data, Dimension, Ix1};
+use ndarray::{ArrayBase, Data, Dimension, Ix1, Ix2, ViewRepr};
 
-use crate::{Arr, OwnedArr, Scalar, TrainableLayer, UninitRepr};
+use crate::{Arr, OwnedArr, Scalar, Slice, TrainableLayer, UninitRepr};
 
 use super::{Activation, ActivationLayer};
 
@@ -16,19 +16,23 @@ impl Activation for Relu {
 }
 
 impl TrainableLayer for ActivationLayer<Relu> {
+    type TrainState<S: ndarray::RawData> = ArrayBase<S, Ix2>;
+
     fn train_state_size(&self, batch_size: usize) -> usize {
         self.shape.size() * batch_size
+    }
+
+    fn view_train_state<S: Slice>(&self, batch_size: usize, data: S) -> Self::TrainState<S::Repr> {
+        data.into_array([batch_size, self.shape.into_pattern()])
     }
 
     fn forward<F: Scalar>(
         &self,
         _state: Self::State<ndarray::ViewRepr<&F>>,
         input: Arr<impl Data<Elem = F>, Self::InputShape>,
-        train_state: &mut [std::mem::MaybeUninit<F>],
+        train_state: &mut Self::TrainState<UninitRepr<F>>,
     ) -> OwnedArr<F, Self::OutputShape> {
-        let train_state = ArrayViewMut::from_shape(input.raw_dim(), train_state).unwrap();
         input.assign_to(train_state);
-
         Relu::apply(input)
     }
 
@@ -36,18 +40,9 @@ impl TrainableLayer for ActivationLayer<Relu> {
         &self,
         _state: Self::State<ndarray::ViewRepr<&F>>,
         _d_state: Self::State<UninitRepr<F>>,
-        train_state: &[F],
+        train_state: Self::TrainState<ViewRepr<&F>>,
         d_output: Arr<impl Data<Elem = F>, Self::OutputShape>,
     ) -> OwnedArr<F, Self::InputShape> {
-        let (batch_size, output_size) = d_output.raw_dim().into_pattern();
-        debug_assert_eq!(
-            output_size,
-            self.shape.into_pattern(),
-            "output size should match specified size for the layer"
-        );
-
-        let train_state =
-            ArrayView::from_shape([batch_size, self.shape.into_pattern()], train_state).unwrap();
         let sign = train_state.mapv(|f| f.signum().max(F::zero()));
         sign * d_output
     }

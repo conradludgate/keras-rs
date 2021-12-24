@@ -1,6 +1,6 @@
-use ndarray::{ArrayView, ArrayViewMut, Data, Dimension, Ix1};
+use ndarray::{ArrayBase, Data, Dimension, Ix1, Ix2, ViewRepr};
 
-use crate::{Arr, OwnedArr, Scalar, TrainableLayer, UninitRepr};
+use crate::{Arr, OwnedArr, Scalar, Slice, TrainableLayer, UninitRepr};
 
 use super::{Activation, ActivationLayer};
 
@@ -18,18 +18,22 @@ impl Activation for Sigmoid {
 }
 
 impl TrainableLayer for ActivationLayer<Sigmoid> {
+    type TrainState<S: ndarray::RawData> = ArrayBase<S, Ix2>;
     fn train_state_size(&self, batch_size: usize) -> usize {
         self.shape.size() * batch_size
+    }
+
+    fn view_train_state<S: Slice>(&self, batch_size: usize, data: S) -> Self::TrainState<S::Repr> {
+        data.into_array([batch_size, self.shape.into_pattern()])
     }
 
     fn forward<F: Scalar>(
         &self,
         _state: Self::State<ndarray::ViewRepr<&F>>,
         input: Arr<impl Data<Elem = F>, Self::InputShape>,
-        train_state: &mut [std::mem::MaybeUninit<F>],
+        train_state: &mut Self::TrainState<UninitRepr<F>>,
     ) -> OwnedArr<F, Self::OutputShape> {
         let y = Sigmoid::apply(input);
-        let train_state = ArrayViewMut::from_shape(y.raw_dim(), train_state).unwrap();
         y.assign_to(train_state);
         y
     }
@@ -38,10 +42,9 @@ impl TrainableLayer for ActivationLayer<Sigmoid> {
         &self,
         _state: Self::State<ndarray::ViewRepr<&F>>,
         _d_state: Self::State<UninitRepr<F>>,
-        train_state: &[F],
+        train_state: Self::TrainState<ViewRepr<&F>>,
         d_output: Arr<impl Data<Elem = F>, Self::OutputShape>,
     ) -> OwnedArr<F, Self::InputShape> {
-        let y = ArrayView::from_shape(d_output.raw_dim(), train_state).unwrap();
-        d_output.into_owned() * y * (y.mapv(F::neg) + F::one())
+        d_output.into_owned() * train_state * (train_state.mapv(F::neg) + F::one())
     }
 }

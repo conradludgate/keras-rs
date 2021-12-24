@@ -1,13 +1,13 @@
 use std::mem::MaybeUninit;
 
 use ndarray::{
-    linalg::general_mat_mul, ArrayBase, ArrayView, ArrayViewMut, Axis, Data, Dimension,
-    IntoDimension, Ix1, Ix2, RawData, ViewRepr,
+    linalg::general_mat_mul, ArrayBase, Axis, Data, Dimension, IntoDimension, Ix1, Ix2, RawData,
+    ViewRepr,
 };
 use rand::Rng;
 use rand_distr::{Distribution, Normal, StandardNormal};
 
-use crate::{Arr, GraphBuilder, Initialise, OwnedArr, Scalar, TrainableLayer, Slice};
+use crate::{Arr, GraphBuilder, Initialise, OwnedArr, Scalar, Slice, TrainableLayer, UninitRepr};
 
 impl Layer {
     pub fn output(shape: impl IntoDimension<Dim = Ix1>) -> Builder {
@@ -107,24 +107,27 @@ where
         state.weights.map_inplace(|w| {
             w.write(dist.sample(rng));
         });
-        state.biases.map_inplace(|w| {
-            w.write(dist.sample(rng));
-        });
+        state.biases.fill(MaybeUninit::new(F::zero()));
     }
 }
 
 impl TrainableLayer for Layer {
+    type TrainState<S: RawData> = ArrayBase<S, Ix2>;
+
     fn train_state_size(&self, batch_size: usize) -> usize {
         self.input_shape.size() * batch_size
+    }
+
+    fn view_train_state<S: Slice>(&self, batch_size: usize, data: S) -> Self::TrainState<S::Repr> {
+        data.into_array([batch_size, self.input_shape.into_pattern()])
     }
 
     fn forward<F: Scalar>(
         &self,
         state: Self::State<ViewRepr<&F>>,
         input: Arr<impl Data<Elem = F>, Self::InputShape>,
-        train_state: &mut [MaybeUninit<F>],
+        train_state: &mut Self::TrainState<UninitRepr<F>>,
     ) -> OwnedArr<F, Self::OutputShape> {
-        let train_state = ArrayViewMut::from_shape(input.raw_dim(), train_state).unwrap();
         input.assign_to(train_state);
         crate::Layer::apply(self, state, input)
     }
@@ -133,20 +136,9 @@ impl TrainableLayer for Layer {
         &self,
         state: Self::State<ViewRepr<&F>>,
         d_state: Self::State<crate::UninitRepr<F>>,
-        train_state: &[F],
+        train_state: Self::TrainState<ViewRepr<&F>>,
         d_output: Arr<impl Data<Elem = F>, Self::OutputShape>,
     ) -> OwnedArr<F, Self::InputShape> {
-        let (batch_size, output_size) = d_output.raw_dim().into_pattern();
-        debug_assert_eq!(
-            output_size,
-            self.output_shape.into_pattern(),
-            "output size should match specified size for the layer"
-        );
-
-        let train_state =
-            ArrayView::from_shape([batch_size, self.input_shape.into_pattern()], train_state)
-                .unwrap();
-
         // d_weights = input.T @ d_output
         unsafe {
             // this is only safe iff this GEMM function respects beta == 0 and does not try to read

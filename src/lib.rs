@@ -5,12 +5,15 @@ use std::{mem::MaybeUninit, ops::Neg};
 
 use model::{fill, Model};
 use named::Named;
-use ndarray::{Data, Dimension, IntoDimension, LinalgScalar, RawData, ScalarOperand, ViewRepr, ArrayBase};
+use ndarray::{
+    ArrayBase, Data, Dimension, IntoDimension, LinalgScalar, RawData, ScalarOperand, ViewRepr,
+};
 use rand::{thread_rng, Rng};
 use rand_distr::num_traits::{Float, FromPrimitive};
 
 pub mod activation;
 pub mod cost;
+pub mod embedding;
 pub mod linear;
 pub mod model;
 pub mod named;
@@ -124,20 +127,22 @@ pub unsafe trait Initialise<F: Scalar>: Layer {
 }
 
 pub trait TrainableLayer: Layer {
+    type TrainState<S: RawData>;
     fn train_state_size(&self, batch_size: usize) -> usize;
+    fn view_train_state<S: Slice>(&self, batch_size: usize, data: S) -> Self::TrainState<S::Repr>;
 
     fn forward<F: Scalar>(
         &self,
         state: Self::State<ViewRepr<&F>>,
         input: Arr<impl Data<Elem = F>, Self::InputShape>,
-        train_state: &mut [MaybeUninit<F>],
+        train_state: &mut Self::TrainState<UninitRepr<F>>,
     ) -> OwnedArr<F, Self::OutputShape>;
 
     fn backward<F: Scalar>(
         &self,
         state: Self::State<ViewRepr<&F>>,
         d_state: Self::State<UninitRepr<F>>,
-        train_state: &[F],
+        train_state: Self::TrainState<ViewRepr<&F>>,
         d_output: Arr<impl Data<Elem = F>, Self::OutputShape>,
     ) -> OwnedArr<F, Self::InputShape>;
 }

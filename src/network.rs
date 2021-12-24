@@ -1,6 +1,7 @@
+use ndarray::ViewRepr;
 use rand::Rng;
 
-use crate::{Arr, GraphBuilder, Initialise, Layer, Scalar, TrainableLayer};
+use crate::{Arr, GraphBuilder, Initialise, Layer, Scalar, TrainableLayer, UninitRepr};
 
 impl<G1, G2> GraphBuilder for (G1, G2)
 where
@@ -72,34 +73,44 @@ where
     L1: TrainableLayer,
     L2: TrainableLayer + Layer<InputShape = L1::OutputShape>,
 {
+    type TrainState<S: ndarray::RawData> = (L1::TrainState<S>, L2::TrainState<S>);
+
     fn train_state_size(&self, batch_size: usize) -> usize {
         self.0.train_state_size(batch_size) + self.1.train_state_size(batch_size)
+    }
+
+    fn view_train_state<S: crate::Slice>(
+        &self,
+        batch_size: usize,
+        data: S,
+    ) -> Self::TrainState<S::Repr> {
+        let n0 = self.0.train_state_size(batch_size);
+        let (data0, data1) = data.split(n0);
+        (
+            self.0.view_train_state(batch_size, data0),
+            self.1.view_train_state(batch_size, data1),
+        )
     }
 
     fn forward<F: Scalar>(
         &self,
         state: Self::State<ndarray::ViewRepr<&F>>,
         input: Arr<impl ndarray::Data<Elem = F>, Self::InputShape>,
-        train_state: &mut [std::mem::MaybeUninit<F>],
+        train_state: &mut Self::TrainState<UninitRepr<F>>,
     ) -> crate::OwnedArr<F, Self::OutputShape> {
-        let bs = input.shape()[0];
-        let (ts0, ts1) = train_state.split_at_mut(self.0.train_state_size(bs));
-
-        let o0 = self.0.forward(state.0, input, ts0);
-        self.1.forward(state.1, o0, ts1)
+        let o0 = self.0.forward(state.0, input, &mut train_state.0);
+        self.1.forward(state.1, o0, &mut train_state.1)
     }
 
     fn backward<F: Scalar>(
         &self,
         state: Self::State<ndarray::ViewRepr<&F>>,
         d_state: Self::State<crate::UninitRepr<F>>,
-        train_state: &[F],
+        train_state: Self::TrainState<ViewRepr<&F>>,
         d_output: Arr<impl ndarray::Data<Elem = F>, Self::OutputShape>,
     ) -> crate::OwnedArr<F, Self::InputShape> {
-        let bs = d_output.shape()[0];
-        let (ts0, ts1) = train_state.split_at(self.0.train_state_size(bs));
-        let d_output = self.1.backward(state.1, d_state.1, ts1, d_output);
-        self.0.backward(state.0, d_state.0, ts0, d_output)
+        let d_output = self.1.backward(state.1, d_state.1, train_state.1, d_output);
+        self.0.backward(state.0, d_state.0, train_state.0, d_output)
     }
 }
 

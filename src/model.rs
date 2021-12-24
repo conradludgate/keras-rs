@@ -197,26 +197,33 @@ where
         &mut self,
         input: Arr<impl Data<Elem = F>, G::InputShape>,
         train_state_buf: &'a mut Vec<F>,
-    ) -> (OwnedArr<F, G::OutputShape>, &'a mut [F]) {
+    ) -> (
+        OwnedArr<F, G::OutputShape>,
+        <G::Layer as TrainableLayer>::TrainState<ViewRepr<&'a F>>,
+    ) {
         // allocate space and get uninit slice
-        let train_state_size = self.model.layer.train_state_size(input.shape()[0]);
+        let batch_size = input.shape()[0];
+        let train_state_size = self.model.layer.train_state_size(batch_size);
         train_state_buf.clear();
 
         // # Safety
         // Train Layer forward should initialise every value
-        unsafe {
+        let (output, train_state) = unsafe {
             fill(train_state_buf, train_state_size, |train_state| {
+                let mut train_state = self.model.layer.view_train_state(batch_size, train_state);
                 self.model
                     .layer
-                    .forward(self.model.state(), input, train_state)
+                    .forward(self.model.state(), input, &mut train_state)
             })
-        }
+        };
+        let train_state = self.model.layer.view_train_state(batch_size, &*train_state);
+        (output, train_state)
     }
 
     fn batch_backward<'a>(
         &mut self,
         d_output: Arr<impl Data<Elem = F>, G::OutputShape>,
-        train_state: &[F],
+        train_state: <G::Layer as TrainableLayer>::TrainState<ViewRepr<&F>>,
         gradiants_buf: &'a mut Vec<F>,
     ) -> &'a mut [F] {
         // allocate space and get uninit state
