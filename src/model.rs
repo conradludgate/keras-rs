@@ -148,6 +148,8 @@ where
         ArrView<'a, F, G::InputShape>,
         ArrView<'a, F, G::OutputShape>,
     ) {
+        data_buf.clear();
+
         let mut input_dim = input.raw_dim();
         input_dim.as_array_view_mut()[0] = indices.len();
 
