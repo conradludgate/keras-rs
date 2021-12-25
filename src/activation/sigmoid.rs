@@ -1,6 +1,6 @@
-use ndarray::{ArrayBase, Data, Dimension, Ix1, Ix2, ViewRepr};
+use ndarray::{ArrayBase, Data, Dimension, Ix1, Ix2, ViewRepr, IntoDimension};
 
-use crate::{Arr, OwnedArr, Scalar, Slice, TrainableLayer, UninitRepr};
+use crate::{Arr, OwnedArr, Scalar, Slice, TrainableLayer, UninitRepr, UninitArr};
 
 use super::{Activation, ActivationLayer};
 
@@ -9,11 +9,18 @@ pub struct Sigmoid;
 impl Activation for Sigmoid {
     type Shape = Ix1;
 
-    fn apply<F: Scalar>(input: Arr<impl Data<Elem = F>, Self::Shape>) -> OwnedArr<F, Self::Shape> {
-        let mut y = input.into_owned();
+    fn apply<F: Scalar>(
+        input: Arr<impl Data<Elem = F>, Self::Shape>,
+        mut output: UninitArr<F, Self::Shape>,
+    ) {
         let one = F::one();
-        y.mapv_inplace(|x| (one / (one + (-x).exp())));
-        y
+        output.zip_mut_with(&input, |o, &i| {
+            o.write(one / (one + (-i).exp()));
+        });
+    }
+
+    fn batch(shape: Self::Shape, batch_size: usize) -> <Self::Shape as Dimension>::Larger {
+        [batch_size, shape.into_pattern()].into_dimension()
     }
 }
 
@@ -33,9 +40,10 @@ impl TrainableLayer for ActivationLayer<Sigmoid> {
         input: Arr<impl Data<Elem = F>, Self::InputShape>,
         train_state: &mut Self::TrainState<UninitRepr<F>>,
     ) -> OwnedArr<F, Self::OutputShape> {
-        let y = Sigmoid::apply(input);
-        y.assign_to(train_state);
-        y
+        // let y = Sigmoid::apply(input);
+        // y.assign_to(train_state);
+        // y
+        input.into_owned()
     }
 
     fn backward<F: Scalar>(

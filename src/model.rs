@@ -15,14 +15,25 @@ pub struct Model<F: Scalar, G: GraphBuilder> {
 
 impl<F: Scalar, G: GraphBuilder> Model<F, G> {
     fn state(&self) -> <G::Layer as Layer>::State<ViewRepr<&'_ F>> {
-        self.layer.view(self.data.as_slice())
+        self.layer.view_state(self.data.as_slice())
     }
 
     pub fn apply(
         &self,
         input: Arr<impl Data<Elem = F>, G::InputShape>,
     ) -> OwnedArr<F, G::OutputShape> {
-        self.layer.apply(self.state(), input)
+        let batch_size = input.shape()[0];
+        let mut output =
+            OwnedArr::<F, G::OutputShape>::uninit(self.layer.batched_output_shape(batch_size));
+        let stack_size = self.layer.stack_space(batch_size);
+        let mut stack = Vec::with_capacity(stack_size);
+        self.layer.apply(
+            self.state(),
+            input,
+            output.view_mut(),
+            &mut stack.spare_capacity_mut()[..stack_size],
+        );
+        unsafe { output.assume_init() }
     }
 }
 
@@ -233,7 +244,7 @@ where
         // Train Layer backward should initialise every value
         unsafe {
             fill(gradiants_buf, self.model.layer.size(), |d_state| {
-                let d_state = self.model.layer.view(d_state);
+                let d_state = self.model.layer.view_state(d_state);
 
                 // feed model backward, storing grads in uninit state
                 self.model

@@ -7,7 +7,9 @@ use ndarray::{
 use rand::Rng;
 use rand_distr::{Distribution, Normal, StandardNormal};
 
-use crate::{Arr, GraphBuilder, Initialise, OwnedArr, Scalar, Slice, TrainableLayer, UninitRepr};
+use crate::{
+    Arr, GraphBuilder, Initialise, OwnedArr, Scalar, Slice, TrainableLayer, UninitArr, UninitRepr,
+};
 
 impl Layer {
     pub fn output(shape: impl IntoDimension<Dim = Ix1>) -> Builder {
@@ -57,7 +59,15 @@ impl crate::Layer for Layer {
         self.output_shape
     }
 
-    fn view<S: Slice>(&self, data: S) -> Self::State<S::Repr> {
+    fn batched_output_shape(&self, batch_size: usize) -> Ix2 {
+        [batch_size, self.output_shape.into_pattern()].into_dimension()
+    }
+
+    fn stack_space(&self, _batch_size: usize) -> usize {
+        0
+    }
+
+    fn view_state<S: Slice>(&self, data: S) -> Self::State<S::Repr> {
         let i = self.input_shape.into_pattern();
         let o = self.output_shape.into_pattern();
 
@@ -71,7 +81,9 @@ impl crate::Layer for Layer {
         &self,
         state: Self::State<ViewRepr<&F>>,
         input: Arr<impl Data<Elem = F>, Self::InputShape>,
-    ) -> OwnedArr<F, Self::OutputShape> {
+        mut output: UninitArr<F, Self::OutputShape>,
+        _stack: &mut [MaybeUninit<F>],
+    ) {
         let (batch_size, input_size) = input.raw_dim().into_pattern();
         debug_assert_eq!(
             input_size,
@@ -79,15 +91,15 @@ impl crate::Layer for Layer {
             "input size should match specified size for the model"
         );
 
-        let mut output = state
+        state
             .biases
             .broadcast([batch_size, self.output_shape.into_pattern()])
             .unwrap()
-            .into_owned();
+            .assign_to(output.view_mut());
+
+        let mut output = unsafe { output.assume_init() };
 
         general_mat_mul(F::one(), &input, &state.weights, F::one(), &mut output);
-
-        output
     }
 }
 
@@ -128,8 +140,12 @@ impl TrainableLayer for Layer {
         input: Arr<impl Data<Elem = F>, Self::InputShape>,
         train_state: &mut Self::TrainState<UninitRepr<F>>,
     ) -> OwnedArr<F, Self::OutputShape> {
+        use crate::Layer;
         input.assign_to(train_state);
-        crate::Layer::apply(self, state, input)
+        let batch_size = input.shape()[0];
+        let mut output = ndarray::Array2::uninit(self.batched_output_shape(batch_size));
+        self.apply(state, input, output.view_mut(), &mut []);
+        unsafe { output.assume_init() }
     }
 
     fn backward<F: Scalar>(

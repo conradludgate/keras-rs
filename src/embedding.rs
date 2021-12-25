@@ -1,6 +1,8 @@
-use ndarray::{Array3, ArrayBase, Axis, Data, Dimension, IntoDimension, Ix1, Ix2, ViewRepr};
+use std::mem::MaybeUninit;
 
-use crate::{Arr, GraphBuilder, Layer, OwnedArr, Scalar, Slice};
+use ndarray::{ArrayBase, Axis, Data, Dimension, IntoDimension, Ix1, Ix2, ViewRepr};
+
+use crate::{Arr, GraphBuilder, Layer, Scalar, Slice, UninitArr};
 
 pub struct Embedding {
     pub input_dim: usize,
@@ -46,7 +48,15 @@ impl Layer for EmbeddingLayer {
         [self.timesteps, self.output_dim].into_dimension()
     }
 
-    fn view<S: Slice>(&self, data: S) -> Self::State<S::Repr> {
+    fn batched_output_shape(&self, batch_size: usize) -> <Self::OutputShape as Dimension>::Larger {
+        [batch_size, self.timesteps, self.output_dim].into_dimension()
+    }
+
+    fn stack_space(&self, _batch_size: usize) -> usize {
+        0
+    }
+
+    fn view_state<S: Slice>(&self, data: S) -> Self::State<S::Repr> {
         data.into_array([self.input_dim, self.output_dim])
     }
 
@@ -54,10 +64,11 @@ impl Layer for EmbeddingLayer {
         &self,
         state: Self::State<ViewRepr<&F>>,
         input: Arr<impl Data<Elem = F>, Self::InputShape>,
-    ) -> OwnedArr<F, Self::OutputShape> {
+        mut output: UninitArr<F, Self::OutputShape>,
+        _stack: &mut [MaybeUninit<F>],
+    ) {
         let (batch_size, timesteps) = input.raw_dim().into_pattern();
         debug_assert_eq!(timesteps, self.timesteps);
-        let mut output = Array3::uninit([batch_size, self.timesteps, self.output_dim]);
 
         for i in 0..batch_size {
             let input = input.index_axis(Axis(0), i);
@@ -68,7 +79,5 @@ impl Layer for EmbeddingLayer {
                 state.index_axis(Axis(0), input).assign_to(output)
             }
         }
-
-        unsafe { output.assume_init() }
     }
 }

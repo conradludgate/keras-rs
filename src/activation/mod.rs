@@ -1,6 +1,8 @@
-use ndarray::{ArrayBase, Data, Dimension, OwnedRepr};
+use std::mem::MaybeUninit;
 
-use crate::{Arr, GraphBuilder, Initialise, Layer, OwnedArr, Scalar};
+use ndarray::{Data, Dimension};
+
+use crate::{Arr, GraphBuilder, Initialise, Layer, Scalar, UninitArr};
 
 pub mod relu;
 pub mod sigmoid;
@@ -10,7 +12,10 @@ pub trait Activation {
 
     fn apply<F: crate::Scalar>(
         input: Arr<impl Data<Elem = F>, Self::Shape>,
-    ) -> OwnedArr<F, Self::Shape>;
+        output: UninitArr<F, Self::Shape>,
+    );
+
+    fn batch(shape: Self::Shape, batch_size: usize) -> <Self::Shape as Dimension>::Larger;
 }
 
 impl<A: Activation> GraphBuilder for A {
@@ -40,14 +45,24 @@ impl<A: Activation> Layer for ActivationLayer<A> {
         self.shape.clone()
     }
 
-    fn view<S: crate::Slice>(&self, _data: S) -> Self::State<S::Repr> {}
+    fn batched_output_shape(&self, batch_size: usize) -> <Self::OutputShape as Dimension>::Larger {
+        A::batch(self.output_shape(), batch_size)
+    }
+
+    fn stack_space(&self, batch_size: usize) -> usize {
+        self.batched_output_shape(batch_size).size()
+    }
+
+    fn view_state<S: crate::Slice>(&self, _data: S) -> Self::State<S::Repr> {}
 
     fn apply<F: crate::Scalar>(
         &self,
         _state: Self::State<ndarray::ViewRepr<&F>>,
-        input: ArrayBase<impl Data<Elem = F>, <<Self as Layer>::InputShape as Dimension>::Larger>,
-    ) -> ArrayBase<OwnedRepr<F>, <<Self as Layer>::OutputShape as Dimension>::Larger> {
-        A::apply(input)
+        input: Arr<impl Data<Elem = F>, Self::InputShape>,
+        output: UninitArr<F, Self::OutputShape>,
+        _stack: &mut [MaybeUninit<F>],
+    ) {
+        A::apply(input, output)
     }
 }
 

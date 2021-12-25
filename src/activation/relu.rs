@@ -1,6 +1,6 @@
-use ndarray::{ArrayBase, Data, Dimension, Ix1, Ix2, ViewRepr};
+use ndarray::{ArrayBase, Data, Dimension, Ix1, Ix2, ViewRepr, IntoDimension};
 
-use crate::{Arr, OwnedArr, Scalar, Slice, TrainableLayer, UninitRepr};
+use crate::{Arr, OwnedArr, Scalar, Slice, TrainableLayer, UninitArr, UninitRepr};
 
 use super::{Activation, ActivationLayer};
 
@@ -9,10 +9,20 @@ pub struct Relu;
 impl Activation for Relu {
     type Shape = Ix1;
 
-    fn apply<F: Scalar>(input: Arr<impl Data<Elem = F>, Self::Shape>) -> OwnedArr<F, Self::Shape> {
+    fn apply<F: Scalar>(
+        input: Arr<impl Data<Elem = F>, Self::Shape>,
+        mut output: UninitArr<F, Self::Shape>,
+    ) {
         let zero = F::zero();
-        input.mapv(|x| x.max(zero))
+        output.zip_mut_with(&input, |o, i| {
+            o.write(i.max(zero));
+        });
     }
+
+    fn batch(shape: Self::Shape, batch_size: usize) -> <Self::Shape as Dimension>::Larger {
+        [batch_size, shape.into_pattern()].into_dimension()
+    }
+    
 }
 
 impl TrainableLayer for ActivationLayer<Relu> {
@@ -33,7 +43,8 @@ impl TrainableLayer for ActivationLayer<Relu> {
         train_state: &mut Self::TrainState<UninitRepr<F>>,
     ) -> OwnedArr<F, Self::OutputShape> {
         input.assign_to(train_state);
-        Relu::apply(input)
+        // Relu::apply(input)
+        input.into_owned()
     }
 
     fn backward<F: Scalar>(

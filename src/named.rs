@@ -1,4 +1,8 @@
-use crate::{GraphBuilder, Layer};
+use std::mem::MaybeUninit;
+
+use ndarray::Dimension;
+
+use crate::{GraphBuilder, Layer, Arr, UninitArr, Scalar, Slice};
 
 pub struct Named<I, S: ToString> {
     pub(crate) inner: I,
@@ -39,15 +43,25 @@ impl<L: Layer, S: ToString> Layer for Named<L, S> {
         self.inner.output_shape()
     }
 
-    fn view<Sl: crate::Slice>(&self, data: Sl) -> Self::State<Sl::Repr> {
-        self.inner.view(data)
+    fn batched_output_shape(&self, batch_size: usize) -> <Self::OutputShape as Dimension>::Larger {
+        self.inner.batched_output_shape(batch_size)
     }
 
-    fn apply<F: crate::Scalar>(
+    fn stack_space(&self, batch_size: usize) -> usize {
+        self.inner.stack_space(batch_size)
+    }
+
+    fn view_state<Sl: Slice>(&self, data: Sl) -> Self::State<Sl::Repr> {
+        self.inner.view_state(data)
+    }
+
+    fn apply<F: Scalar>(
         &self,
         state: Self::State<ndarray::ViewRepr<&F>>,
-        input: crate::Arr<impl ndarray::Data<Elem = F>, Self::InputShape>,
-    ) -> crate::OwnedArr<F, Self::OutputShape> {
-        self.inner.apply(state, input)
+        input: Arr<impl ndarray::Data<Elem = F>, Self::InputShape>,
+        output: UninitArr<F, Self::OutputShape>,
+        stack: &mut [MaybeUninit<F>],
+    )  {
+        self.inner.apply(state, input, output, stack)
     }
 }

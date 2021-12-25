@@ -53,7 +53,7 @@ pub trait GraphBuilder: Sized {
 
         unsafe {
             fill(&mut data, len, |data| {
-                let mut uninit = layer.view(data);
+                let mut uninit = layer.view_state(data);
                 layer.init(&mut thread_rng(), &mut uninit);
             });
         }
@@ -110,14 +110,24 @@ pub trait Layer {
 
     fn size(&self) -> usize;
     fn output_shape(&self) -> Self::OutputShape;
+    fn batched_output_shape(&self, batch_size: usize) -> <Self::OutputShape as Dimension>::Larger;
+    fn stack_space(&self, batch_size: usize) -> usize;
 
-    fn view<S: Slice>(&self, data: S) -> Self::State<S::Repr>;
+    fn view_state<S: Slice>(&self, data: S) -> Self::State<S::Repr>;
 
+    /// Apply the layer to the input and get the output
+    ///
+    /// `state` stores any parameters used in the forward pass. See [`view_state`].
+    /// `input` is the input to the layer
+    /// `stack` is where the output is written to. The length is specified by [`stack_space`].
+    /// If `stack` length is larger than needed for the output, any spare data can be written there and will be discarded later
     fn apply<F: Scalar>(
         &self,
         state: Self::State<ViewRepr<&F>>,
         input: Arr<impl Data<Elem = F>, Self::InputShape>,
-    ) -> OwnedArr<F, Self::OutputShape>;
+        output: UninitArr<F, Self::OutputShape>,
+        stack: &mut [MaybeUninit<F>]
+    );
 }
 
 /// # Safety

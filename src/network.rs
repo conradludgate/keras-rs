@@ -1,7 +1,9 @@
-use ndarray::ViewRepr;
+use std::mem::MaybeUninit;
+
+use ndarray::{ArrayViewMut, Dimension, ViewRepr};
 use rand::Rng;
 
-use crate::{Arr, GraphBuilder, Initialise, Layer, Scalar, TrainableLayer, UninitRepr};
+use crate::{Arr, GraphBuilder, Initialise, Layer, Scalar, TrainableLayer, UninitArr, UninitRepr};
 
 impl<G1, G2> GraphBuilder for (G1, G2)
 where
@@ -37,19 +39,46 @@ where
         self.1.output_shape()
     }
 
-    fn view<S: crate::Slice>(&self, data: S) -> Self::State<S::Repr> {
+    fn batched_output_shape(&self, batch_size: usize) -> <Self::OutputShape as Dimension>::Larger {
+        self.1.batched_output_shape(batch_size)
+    }
+
+    fn stack_space(&self, batch_size: usize) -> usize {
+        // Each path needs some spare stack space
+        let sp0 = self.0.stack_space(batch_size);
+        let out0 = self.0.batched_output_shape(batch_size).size(); // space used by output
+        let sp1 = self.1.stack_space(batch_size) - out0;
+        sp0.max(sp1)
+    }
+
+    fn view_state<S: crate::Slice>(&self, data: S) -> Self::State<S::Repr> {
         let i = self.0.size();
         let data = data.split(i);
-        (self.0.view(data.0), self.1.view(data.1))
+        (self.0.view_state(data.0), self.1.view_state(data.1))
     }
 
     fn apply<F: Scalar>(
         &self,
         state: Self::State<ndarray::ViewRepr<&F>>,
         input: Arr<impl ndarray::Data<Elem = F>, Self::InputShape>,
-    ) -> crate::OwnedArr<F, Self::OutputShape> {
-        let inner = self.0.apply(state.0, input);
-        self.1.apply(state.1, inner)
+        output: UninitArr<F, Self::OutputShape>,
+        stack: &mut [MaybeUninit<F>],
+    ) {
+        let batch_size = input.shape()[0];
+        let inner_size = self.0.batched_output_shape(batch_size).size(); // space used by inner output
+
+        let (inner, stack) = stack.split_at_mut(inner_size);
+        let inner_stack_size = self.0.stack_space(batch_size);
+
+        let mut inner =
+            ArrayViewMut::from_shape(self.0.batched_output_shape(batch_size), inner).unwrap();
+
+        self.0
+            .apply(state.0, input, inner.view_mut(), &mut stack[..inner_stack_size]);
+
+        let inner = unsafe { inner.assume_init() };
+
+        self.1.apply(state.1, inner, output, stack)
     }
 }
 
