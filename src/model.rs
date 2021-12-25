@@ -4,8 +4,8 @@ use ndarray::{ArrayView, ArrayViewMut, Axis, Data, Dimension, ViewRepr};
 use rand::{prelude::SliceRandom, thread_rng};
 
 use crate::{
-    cost::Cost, optimise::Optimiser, Arr, ArrView, GraphBuilder, Layer, OwnedArr, Scalar,
-    TrainableLayer,
+    cost::Cost, optimise::Optimiser, Arr, ArrView, ArrViewMut, GraphBuilder, Layer, OwnedArr,
+    Scalar, TrainableLayer, UninitArr,
 };
 
 pub struct Model<F: Scalar, G: GraphBuilder> {
@@ -57,6 +57,7 @@ where
 
 struct Bufs<F> {
     data: Vec<F>,
+    stack: Vec<F>,
     gradiants: Vec<F>,
     train_state: Vec<F>,
 }
@@ -65,6 +66,7 @@ impl<F> Default for Bufs<F> {
     fn default() -> Self {
         Self {
             data: vec![],
+            stack: vec![],
             gradiants: vec![],
             train_state: vec![],
         }
@@ -124,7 +126,13 @@ where
             let (input, expected) =
                 self.select_batch(input.view(), expected.view(), indices, &mut bufs.data);
             cost = cost
-                + self.train_batch(input, expected, &mut bufs.gradiants, &mut bufs.train_state);
+                + self.train_batch(
+                    input,
+                    expected,
+                    &mut bufs.gradiants,
+                    &mut bufs.stack,
+                    &mut bufs.train_state,
+                );
         }
 
         cost / F::from_usize((total_inputs + batch_size - 1) / batch_size).unwrap()
@@ -182,6 +190,7 @@ where
         input: Arr<impl Data<Elem = F>, G::InputShape>,
         expected: Arr<impl Data<Elem = F>, G::OutputShape>,
         gradiants_buf: &mut Vec<F>,
+        stack_buf: &mut Vec<F>,
         train_state_buf: &mut Vec<F>,
     ) -> F {
         debug_assert_eq!(
@@ -190,7 +199,7 @@ where
             "input and expected batch sizes should be equal"
         );
 
-        let (output, train_state) = self.batch_forward(input, train_state_buf);
+        let (output, train_state) = self.batch_forward(input, stack_buf, train_state_buf);
 
         let d_output = self.cost.diff(output.view(), expected.view());
 
@@ -204,27 +213,44 @@ where
         self.cost.cost(output, expected)
     }
 
-    fn batch_forward<'a>(
+    fn batch_forward<'a, 'b>(
         &mut self,
         input: Arr<impl Data<Elem = F>, G::InputShape>,
-        train_state_buf: &'a mut Vec<F>,
+        stack_buf: &'a mut Vec<F>,
+        train_state_buf: &'b mut Vec<F>,
     ) -> (
-        OwnedArr<F, G::OutputShape>,
-        <G::Layer as TrainableLayer>::TrainState<ViewRepr<&'a F>>,
+        ArrViewMut<'a, F, G::OutputShape>,
+        <G::Layer as TrainableLayer>::TrainState<ViewRepr<&'b F>>,
     ) {
         // allocate space and get uninit slice
         let batch_size = input.shape()[0];
         let train_state_size = self.model.layer.train_state_size(batch_size);
         train_state_buf.clear();
 
+        let output_shape = self.model.layer.batched_output_shape(batch_size);
+        let stack_size = self.model.layer.stack_space(batch_size);
+        stack_buf.clear();
+        stack_buf.reserve(output_shape.size() + stack_size);
+
+        let (output, stack) = stack_buf
+            .spare_capacity_mut()
+            .split_at_mut(output_shape.size());
+        let mut output = UninitArr::<F, G::OutputShape>::from_shape(output_shape, output).unwrap();
+
         // # Safety
         // Train Layer forward should initialise every value
         let (output, train_state) = unsafe {
             fill(train_state_buf, train_state_size, |train_state| {
                 let mut train_state = self.model.layer.view_train_state(batch_size, train_state);
-                self.model
-                    .layer
-                    .forward(self.model.state(), input, &mut train_state)
+
+                self.model.layer.forward(
+                    self.model.state(),
+                    input,
+                    output.view_mut(),
+                    &mut stack[..stack_size],
+                    &mut train_state,
+                );
+                output.assume_init()
             })
         };
         let train_state = self.model.layer.view_train_state(batch_size, &*train_state);

@@ -46,9 +46,9 @@ where
     fn stack_space(&self, batch_size: usize) -> usize {
         // Each path needs some spare stack space
         let sp0 = self.0.stack_space(batch_size);
-        let out0 = self.0.batched_output_shape(batch_size).size(); // space used by output
-        let sp1 = self.1.stack_space(batch_size) - out0;
-        sp0.max(sp1)
+        let sp1 = self.1.stack_space(batch_size);
+        let inner_size = self.0.batched_output_shape(batch_size).size(); // space used by inner output
+        inner_size + sp0.max(sp1)
     }
 
     fn view_state<S: crate::Slice>(&self, data: S) -> Self::State<S::Repr> {
@@ -73,12 +73,18 @@ where
         let mut inner =
             ArrayViewMut::from_shape(self.0.batched_output_shape(batch_size), inner).unwrap();
 
-        self.0
-            .apply(state.0, input, inner.view_mut(), &mut stack[..inner_stack_size]);
+        self.0.apply(
+            state.0,
+            input,
+            inner.view_mut(),
+            &mut stack[..inner_stack_size],
+        );
 
         let inner = unsafe { inner.assume_init() };
 
-        self.1.apply(state.1, inner, output, stack)
+        let outer_stack_size = self.1.stack_space(batch_size);
+        self.1
+            .apply(state.1, inner, output, &mut stack[..outer_stack_size])
     }
 }
 
@@ -125,10 +131,38 @@ where
         &self,
         state: Self::State<ndarray::ViewRepr<&F>>,
         input: Arr<impl ndarray::Data<Elem = F>, Self::InputShape>,
+        output: UninitArr<F, Self::OutputShape>,
+        stack: &mut [MaybeUninit<F>],
         train_state: &mut Self::TrainState<UninitRepr<F>>,
-    ) -> crate::OwnedArr<F, Self::OutputShape> {
-        let o0 = self.0.forward(state.0, input, &mut train_state.0);
-        self.1.forward(state.1, o0, &mut train_state.1)
+    ) {
+        let batch_size = input.shape()[0];
+        let inner_size = self.0.batched_output_shape(batch_size).size(); // space used by inner output
+        debug_assert_eq!(stack.len(), self.stack_space(batch_size));
+
+        let (inner, stack) = stack.split_at_mut(inner_size);
+        let inner_stack_size = self.0.stack_space(batch_size);
+
+        let mut inner =
+            ArrayViewMut::from_shape(self.0.batched_output_shape(batch_size), inner).unwrap();
+
+        self.0.forward(
+            state.0,
+            input,
+            inner.view_mut(),
+            &mut stack[..inner_stack_size],
+            &mut train_state.0,
+        );
+
+        let inner = unsafe { inner.assume_init() };
+
+        let outer_stack_size = self.1.stack_space(batch_size);
+        self.1.forward(
+            state.1,
+            inner,
+            output,
+            &mut stack[..outer_stack_size],
+            &mut train_state.1,
+        );
     }
 
     fn backward<F: Scalar>(

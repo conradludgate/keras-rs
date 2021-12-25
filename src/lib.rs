@@ -126,7 +126,7 @@ pub trait Layer {
         state: Self::State<ViewRepr<&F>>,
         input: Arr<impl Data<Elem = F>, Self::InputShape>,
         output: UninitArr<F, Self::OutputShape>,
-        stack: &mut [MaybeUninit<F>]
+        stack: &mut [MaybeUninit<F>],
     );
 }
 
@@ -145,8 +145,10 @@ pub trait TrainableLayer: Layer {
         &self,
         state: Self::State<ViewRepr<&F>>,
         input: Arr<impl Data<Elem = F>, Self::InputShape>,
+        output: UninitArr<F, Self::OutputShape>,
+        stack: &mut [MaybeUninit<F>],
         train_state: &mut Self::TrainState<UninitRepr<F>>,
-    ) -> OwnedArr<F, Self::OutputShape>;
+    );
 
     fn backward<F: Scalar>(
         &self,

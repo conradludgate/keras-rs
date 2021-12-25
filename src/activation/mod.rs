@@ -49,8 +49,8 @@ impl<A: Activation> Layer for ActivationLayer<A> {
         A::batch(self.output_shape(), batch_size)
     }
 
-    fn stack_space(&self, batch_size: usize) -> usize {
-        self.batched_output_shape(batch_size).size()
+    fn stack_space(&self, _batch_size: usize) -> usize {
+        0
     }
 
     fn view_state<S: crate::Slice>(&self, _data: S) -> Self::State<S::Repr> {}
@@ -60,8 +60,9 @@ impl<A: Activation> Layer for ActivationLayer<A> {
         _state: Self::State<ndarray::ViewRepr<&F>>,
         input: Arr<impl Data<Elem = F>, Self::InputShape>,
         output: UninitArr<F, Self::OutputShape>,
-        _stack: &mut [MaybeUninit<F>],
+        stack: &mut [MaybeUninit<F>],
     ) {
+        debug_assert_eq!(stack.len(), 0);
         A::apply(input, output)
     }
 }

@@ -1,4 +1,6 @@
-use ndarray::{ArrayBase, Data, Dimension, Ix1, Ix2, ViewRepr, IntoDimension};
+use std::mem::MaybeUninit;
+
+use ndarray::{ArrayBase, Data, Dimension, IntoDimension, Ix1, Ix2, ViewRepr};
 
 use crate::{Arr, OwnedArr, Scalar, Slice, TrainableLayer, UninitArr, UninitRepr};
 
@@ -22,7 +24,6 @@ impl Activation for Relu {
     fn batch(shape: Self::Shape, batch_size: usize) -> <Self::Shape as Dimension>::Larger {
         [batch_size, shape.into_pattern()].into_dimension()
     }
-    
 }
 
 impl TrainableLayer for ActivationLayer<Relu> {
@@ -40,11 +41,12 @@ impl TrainableLayer for ActivationLayer<Relu> {
         &self,
         _state: Self::State<ndarray::ViewRepr<&F>>,
         input: Arr<impl Data<Elem = F>, Self::InputShape>,
+        output: UninitArr<F, Self::OutputShape>,
+        _stack: &mut [MaybeUninit<F>],
         train_state: &mut Self::TrainState<UninitRepr<F>>,
-    ) -> OwnedArr<F, Self::OutputShape> {
+    ) {
         input.assign_to(train_state);
-        // Relu::apply(input)
-        input.into_owned()
+        Relu::apply(input, output);
     }
 
     fn backward<F: Scalar>(

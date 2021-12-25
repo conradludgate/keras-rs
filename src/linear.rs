@@ -82,9 +82,10 @@ impl crate::Layer for Layer {
         state: Self::State<ViewRepr<&F>>,
         input: Arr<impl Data<Elem = F>, Self::InputShape>,
         mut output: UninitArr<F, Self::OutputShape>,
-        _stack: &mut [MaybeUninit<F>],
+        stack: &mut [MaybeUninit<F>],
     ) {
         let (batch_size, input_size) = input.raw_dim().into_pattern();
+        debug_assert_eq!(stack.len(), 0);
         debug_assert_eq!(
             input_size,
             self.input_shape.into_pattern(),
@@ -138,14 +139,13 @@ impl TrainableLayer for Layer {
         &self,
         state: Self::State<ViewRepr<&F>>,
         input: Arr<impl Data<Elem = F>, Self::InputShape>,
+        output: UninitArr<F, Self::OutputShape>,
+        _stack: &mut [MaybeUninit<F>],
         train_state: &mut Self::TrainState<UninitRepr<F>>,
-    ) -> OwnedArr<F, Self::OutputShape> {
+    ) {
         use crate::Layer;
         input.assign_to(train_state);
-        let batch_size = input.shape()[0];
-        let mut output = ndarray::Array2::uninit(self.batched_output_shape(batch_size));
-        self.apply(state, input, output.view_mut(), &mut []);
-        unsafe { output.assume_init() }
+        self.apply(state, input, output, &mut []);
     }
 
     fn backward<F: Scalar>(

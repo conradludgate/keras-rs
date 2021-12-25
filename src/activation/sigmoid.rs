@@ -1,3 +1,5 @@
+use std::mem::MaybeUninit;
+
 use ndarray::{ArrayBase, Data, Dimension, Ix1, Ix2, ViewRepr, IntoDimension};
 
 use crate::{Arr, OwnedArr, Scalar, Slice, TrainableLayer, UninitRepr, UninitArr};
@@ -38,12 +40,12 @@ impl TrainableLayer for ActivationLayer<Sigmoid> {
         &self,
         _state: Self::State<ndarray::ViewRepr<&F>>,
         input: Arr<impl Data<Elem = F>, Self::InputShape>,
+        mut output: UninitArr<F, Self::OutputShape>,
+        _stack: &mut [MaybeUninit<F>],
         train_state: &mut Self::TrainState<UninitRepr<F>>,
-    ) -> OwnedArr<F, Self::OutputShape> {
-        // let y = Sigmoid::apply(input);
-        // y.assign_to(train_state);
-        // y
-        input.into_owned()
+    ) {
+        Sigmoid::apply(input, output.view_mut());
+        output.assign_to(train_state);
     }
 
     fn backward<F: Scalar>(
