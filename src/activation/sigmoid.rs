@@ -1,8 +1,8 @@
 use std::mem::MaybeUninit;
 
-use ndarray::{ArrayBase, Data, Dimension, Ix1, Ix2, ViewRepr, IntoDimension};
+use ndarray::{ArrayBase, Data, Dimension, IntoDimension, Ix1, Ix2, ViewRepr};
 
-use crate::{Arr, OwnedArr, Scalar, Slice, TrainableLayer, UninitRepr, UninitArr};
+use crate::{Arr, Scalar, Slice, TrainableLayer, UninitArr, UninitRepr};
 
 use super::{Activation, ActivationLayer};
 
@@ -36,6 +36,10 @@ impl TrainableLayer for ActivationLayer<Sigmoid> {
         data.into_array([batch_size, self.shape.into_pattern()])
     }
 
+    fn train_stack_space(&self, _batch_size: usize) -> usize {
+        0
+    }
+
     fn forward<F: Scalar>(
         &self,
         _state: Self::State<ndarray::ViewRepr<&F>>,
@@ -54,7 +58,12 @@ impl TrainableLayer for ActivationLayer<Sigmoid> {
         _d_state: Self::State<UninitRepr<F>>,
         train_state: Self::TrainState<ViewRepr<&F>>,
         d_output: Arr<impl Data<Elem = F>, Self::OutputShape>,
-    ) -> OwnedArr<F, Self::InputShape> {
-        d_output.into_owned() * train_state * (train_state.mapv(F::neg) + F::one())
+        mut d_input: UninitArr<F, Self::InputShape>,
+        stack: &mut [MaybeUninit<F>],
+    ) {
+        debug_assert_eq!(stack.len(), 0);
+        d_output.assign_to(d_input.view_mut());
+        let mut d_input = unsafe { d_input.assume_init() };
+        d_input.zip_mut_with(&train_state, |di, &f| *di = *di * f * (-f + F::one()));
     }
 }

@@ -7,9 +7,7 @@ use ndarray::{
 use rand::Rng;
 use rand_distr::{Distribution, Normal, StandardNormal};
 
-use crate::{
-    Arr, GraphBuilder, Initialise, OwnedArr, Scalar, Slice, TrainableLayer, UninitArr, UninitRepr,
-};
+use crate::{Arr, GraphBuilder, Initialise, Scalar, Slice, TrainableLayer, UninitArr, UninitRepr};
 
 impl Layer {
     pub fn output(shape: impl IntoDimension<Dim = Ix1>) -> Builder {
@@ -135,6 +133,10 @@ impl TrainableLayer for Layer {
         data.into_array([batch_size, self.input_shape.into_pattern()])
     }
 
+    fn train_stack_space(&self, _batch_size: usize) -> usize {
+        0
+    }
+
     fn forward<F: Scalar>(
         &self,
         state: Self::State<ViewRepr<&F>>,
@@ -154,7 +156,11 @@ impl TrainableLayer for Layer {
         d_state: Self::State<crate::UninitRepr<F>>,
         train_state: Self::TrainState<ViewRepr<&F>>,
         d_output: Arr<impl Data<Elem = F>, Self::OutputShape>,
-    ) -> OwnedArr<F, Self::InputShape> {
+        d_input: UninitArr<F, Self::InputShape>,
+        stack: &mut [MaybeUninit<F>],
+    ) {
+        debug_assert_eq!(stack.len(), 0);
+
         // d_weights = input.T @ d_output
         unsafe {
             // this is only safe iff this GEMM function respects beta == 0 and does not try to read
@@ -179,7 +185,18 @@ impl TrainableLayer for Layer {
         }
 
         // d_input = d_output @ weights.T
-        d_output.dot(&state.weights.t())
+        unsafe {
+            // this is only safe iff this GEMM function respects beta == 0 and does not try to read
+            // from d_input.
+            let mut d_input = d_input.assume_init();
+            general_mat_mul(
+                F::one(),
+                &d_output,
+                &state.weights.t(),
+                F::zero(),
+                &mut d_input,
+            );
+        }
     }
 }
 

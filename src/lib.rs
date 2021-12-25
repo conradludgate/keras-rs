@@ -140,6 +140,7 @@ pub trait TrainableLayer: Layer {
     type TrainState<S: RawData>;
     fn train_state_size(&self, batch_size: usize) -> usize;
     fn view_train_state<S: Slice>(&self, batch_size: usize, data: S) -> Self::TrainState<S::Repr>;
+    fn train_stack_space(&self, batch_size: usize) -> usize;
 
     fn forward<F: Scalar>(
         &self,
@@ -156,5 +157,7 @@ pub trait TrainableLayer: Layer {
         d_state: Self::State<UninitRepr<F>>,
         train_state: Self::TrainState<ViewRepr<&F>>,
         d_output: Arr<impl Data<Elem = F>, Self::OutputShape>,
-    ) -> OwnedArr<F, Self::InputShape>;
+        d_input: UninitArr<F, Self::InputShape>,
+        stack: &mut [MaybeUninit<F>],
+    );
 }

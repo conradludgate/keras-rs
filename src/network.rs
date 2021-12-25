@@ -127,6 +127,13 @@ where
         )
     }
 
+    fn train_stack_space(&self, batch_size: usize) -> usize {
+        let sp0 = self.0.train_stack_space(batch_size);
+        let sp1 = self.1.train_stack_space(batch_size);
+        let inner_size = self.0.batched_output_shape(batch_size).size(); // space used by inner output
+        inner_size + sp0.max(sp1)
+    }
+
     fn forward<F: Scalar>(
         &self,
         state: Self::State<ndarray::ViewRepr<&F>>,
@@ -171,9 +178,39 @@ where
         d_state: Self::State<crate::UninitRepr<F>>,
         train_state: Self::TrainState<ViewRepr<&F>>,
         d_output: Arr<impl ndarray::Data<Elem = F>, Self::OutputShape>,
-    ) -> crate::OwnedArr<F, Self::InputShape> {
-        let d_output = self.1.backward(state.1, d_state.1, train_state.1, d_output);
-        self.0.backward(state.0, d_state.0, train_state.0, d_output)
+        d_input: UninitArr<F, Self::InputShape>,
+        stack: &mut [MaybeUninit<F>],
+    ) {
+        let batch_size = d_output.shape()[0];
+        let inner_size = self.0.batched_output_shape(batch_size).size(); // space used by inner output
+        debug_assert_eq!(stack.len(), self.train_stack_space(batch_size));
+
+        let (inner, stack) = stack.split_at_mut(inner_size);
+        let inner_stack_size = self.1.train_stack_space(batch_size);
+
+        let mut inner =
+            ArrayViewMut::from_shape(self.0.batched_output_shape(batch_size), inner).unwrap();
+
+        self.1.backward(
+            state.1,
+            d_state.1,
+            train_state.1,
+            d_output,
+            inner.view_mut(),
+            &mut stack[..inner_stack_size],
+        );
+
+        let inner = unsafe { inner.assume_init() };
+
+        let outer_stack_size = self.0.train_stack_space(batch_size);
+        self.0.backward(
+            state.0,
+            d_state.0,
+            train_state.0,
+            inner,
+            d_input,
+            &mut stack[..outer_stack_size],
+        );
     }
 }
 

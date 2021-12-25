@@ -60,6 +60,7 @@ struct Bufs<F> {
     stack: Vec<F>,
     gradiants: Vec<F>,
     train_state: Vec<F>,
+    train_stack: Vec<F>,
 }
 
 impl<F> Default for Bufs<F> {
@@ -69,6 +70,7 @@ impl<F> Default for Bufs<F> {
             stack: vec![],
             gradiants: vec![],
             train_state: vec![],
+            train_stack: vec![],
         }
     }
 }
@@ -132,6 +134,7 @@ where
                     &mut bufs.gradiants,
                     &mut bufs.stack,
                     &mut bufs.train_state,
+                    &mut bufs.train_stack,
                 );
         }
 
@@ -194,6 +197,7 @@ where
         gradiants_buf: &mut Vec<F>,
         stack_buf: &mut Vec<F>,
         train_state_buf: &mut Vec<F>,
+        train_stack_buf: &mut Vec<F>,
     ) -> F {
         debug_assert_eq!(
             input.shape()[0],
@@ -201,11 +205,18 @@ where
             "input and expected batch sizes should be equal"
         );
 
+        let input_shape = input.raw_dim();
         let (output, train_state) = self.batch_forward(input, stack_buf, train_state_buf);
 
         let d_output = self.cost.diff(output.view(), expected.view());
 
-        let grads = self.batch_backward(d_output, train_state, gradiants_buf);
+        let grads = self.batch_backward(
+            d_output,
+            input_shape,
+            train_state,
+            gradiants_buf,
+            train_stack_buf,
+        );
 
         if let Some(r) = self.regularisation {
             r.apply(grads, &self.model.data);
@@ -259,14 +270,27 @@ where
         (output, train_state)
     }
 
-    fn batch_backward<'a>(
+    fn batch_backward<'a, 'b>(
         &mut self,
         d_output: Arr<impl Data<Elem = F>, G::OutputShape>,
+        input_shape: <G::InputShape as Dimension>::Larger,
         train_state: <G::Layer as TrainableLayer>::TrainState<ViewRepr<&F>>,
         gradiants_buf: &'a mut Vec<F>,
+        train_stack_buf: &'b mut Vec<F>,
     ) -> &'a mut [F] {
         // allocate space and get uninit state
         gradiants_buf.clear();
+
+        // allocate space and get uninit slice
+        let batch_size = d_output.shape()[0];
+        let train_stack_size = self.model.layer.train_stack_space(batch_size);
+        train_stack_buf.clear();
+        train_stack_buf.reserve(input_shape.size() + train_stack_size);
+
+        let (d_input, train_stack) = train_stack_buf
+            .spare_capacity_mut()
+            .split_at_mut(input_shape.size());
+        let d_input = UninitArr::<F, G::InputShape>::from_shape(input_shape, d_input).unwrap();
 
         // # Safety
         // Train Layer backward should initialise every value
@@ -275,9 +299,14 @@ where
                 let d_state = self.model.layer.view_state(d_state);
 
                 // feed model backward, storing grads in uninit state
-                self.model
-                    .layer
-                    .backward(self.model.state(), d_state, train_state, d_output)
+                self.model.layer.backward(
+                    self.model.state(),
+                    d_state,
+                    train_state,
+                    d_output,
+                    d_input,
+                    &mut train_stack[..train_stack_size],
+                )
             })
             .1
         }
