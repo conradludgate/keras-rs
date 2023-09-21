@@ -11,6 +11,10 @@ use keras_rs::{
 };
 use ndarray::{Array2, AssignElem, Axis};
 
+// enable optimised accelerate backend on macos
+#[cfg(target_os = "macos")]
+extern crate blas_src;
+
 fn main() {
     // Load MNIST data set
     let data = parse::load_data();

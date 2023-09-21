@@ -219,7 +219,7 @@ where
 /// Then pushing all of them into the macro recursively
 ///
 /// ```
-/// use linear_networks::net;
+/// use keras_rs::net;
 ///
 /// // These two expressions are the same
 /// let a = net!(0, 1, 2, 3);
@@ -231,7 +231,7 @@ where
 /// It leaves the first input and pairs up the rest of them
 ///
 /// ```
-/// use linear_networks::net;
+/// use keras_rs::net;
 ///
 /// let a = net!(0, 1, 2, 3, 4);
 /// let b = net!(0, (1, 2), (3, 4));

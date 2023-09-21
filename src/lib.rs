@@ -1,6 +1,3 @@
-#![feature(generic_associated_types)]
-#![feature(vec_spare_capacity)]
-
 use std::{mem::MaybeUninit, ops::Neg};
 
 use model::{fill, Model};
@@ -28,6 +25,8 @@ pub type UninitArr<'f, F, D> = Arr<UninitRepr<'f, F>, D>;
 pub type OwnedArr<F, D> = Arr<ndarray::OwnedRepr<F>, D>;
 pub type ArrView<'a, F, D> = Arr<ViewRepr<&'a F>, D>;
 pub type ArrViewMut<'a, F, D> = Arr<MutRepr<'a, F>, D>;
+
+type LayerTrainState<'a, F, L> = <L as TrainableLayer>::TrainState<ViewRepr<&'a F>>;
 
 /// An abstract representation of a Computation Graph.
 pub trait GraphBuilder: Sized {

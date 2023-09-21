@@ -4,8 +4,8 @@ use ndarray::{ArrayView, ArrayViewMut, Axis, Data, Dimension, ViewRepr};
 use rand::{prelude::SliceRandom, thread_rng};
 
 use crate::{
-    cost::Cost, optimise::Optimiser, Arr, ArrView, ArrViewMut, GraphBuilder, Layer, OwnedArr,
-    Scalar, TrainableLayer, UninitArr,
+    cost::Cost, optimise::Optimiser, Arr, ArrView, ArrViewMut, GraphBuilder, Layer,
+    LayerTrainState, OwnedArr, Scalar, TrainableLayer, UninitArr,
 };
 
 pub struct Model<F: Scalar, G: GraphBuilder> {
@@ -233,7 +233,7 @@ where
         train_state_buf: &'b mut Vec<F>,
     ) -> (
         ArrViewMut<'a, F, G::OutputShape>,
-        <G::Layer as TrainableLayer>::TrainState<ViewRepr<&'b F>>,
+        LayerTrainState<'b, F, G::Layer>,
     ) {
         // allocate space and get uninit slice
         let batch_size = input.shape()[0];
@@ -270,13 +270,13 @@ where
         (output, train_state)
     }
 
-    fn batch_backward<'a, 'b>(
+    fn batch_backward<'a>(
         &mut self,
         d_output: Arr<impl Data<Elem = F>, G::OutputShape>,
         input_shape: <G::InputShape as Dimension>::Larger,
         train_state: <G::Layer as TrainableLayer>::TrainState<ViewRepr<&F>>,
         gradiants_buf: &'a mut Vec<F>,
-        train_stack_buf: &'b mut Vec<F>,
+        train_stack_buf: &mut Vec<F>,
     ) -> &'a mut [F] {
         // allocate space and get uninit state
         gradiants_buf.clear();

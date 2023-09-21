@@ -2,7 +2,7 @@ use std::mem::MaybeUninit;
 
 use ndarray::Dimension;
 
-use crate::{GraphBuilder, Layer, Arr, UninitArr, Scalar, Slice};
+use crate::{Arr, GraphBuilder, Layer, Scalar, Slice, UninitArr};
 
 pub struct Named<I, S: ToString> {
     pub(crate) inner: I,
@@ -61,7 +61,7 @@ impl<L: Layer, S: ToString> Layer for Named<L, S> {
         input: Arr<impl ndarray::Data<Elem = F>, Self::InputShape>,
         output: UninitArr<F, Self::OutputShape>,
         stack: &mut [MaybeUninit<F>],
-    )  {
+    ) {
         self.inner.apply(state, input, output, stack)
     }
 }
