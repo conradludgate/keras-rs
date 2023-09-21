@@ -11,6 +11,7 @@ use rand_distr::num_traits::{Float, FromPrimitive};
 pub mod activation;
 pub mod cost;
 pub mod embedding;
+pub mod attention;
 pub mod linear;
 pub mod model;
 pub mod named;
