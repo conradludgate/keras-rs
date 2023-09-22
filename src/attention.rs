@@ -93,7 +93,6 @@ impl crate::Layer for Layer {
     ) {
         let (batch_size, history_size, embedding_size) = input.raw_dim().into_pattern();
         let (_, hidden_size) = self.output_shape.into_pattern();
-        debug_assert_eq!(stack.len(), 0);
         debug_assert_eq!(
             (history_size, embedding_size),
             self.input_shape.into_pattern(),
@@ -158,14 +157,14 @@ where
 }
 
 // impl TrainableLayer for Layer {
-//     type TrainState<S: RawData> = ArrayBase<S, Ix2>;
+//     type TrainState<S: RawData> = ();
 
 //     fn train_state_size(&self, batch_size: usize) -> usize {
 //         self.input_shape.size() * batch_size
 //     }
 
 //     fn view_train_state<S: Slice>(&self, batch_size: usize, data: S) -> Self::TrainState<S::Repr> {
-//         data.into_array([batch_size, self.input_shape.into_pattern()])
+//         // data.into_array([batch_size, self.input_shape.into_pattern()])
 //     }
 
 //     fn train_stack_space(&self, _batch_size: usize) -> usize {
@@ -181,7 +180,7 @@ where
 //         train_state: &mut Self::TrainState<UninitRepr<F>>,
 //     ) {
 //         use crate::Layer;
-//         input.assign_to(train_state);
+//         // input.assign_to(train_state);
 //         self.apply(state, input, output, &mut []);
 //     }
 
@@ -194,8 +193,6 @@ where
 //         d_input: UninitArr<F, Self::InputShape>,
 //         stack: &mut [MaybeUninit<F>],
 //     ) {
-//         debug_assert_eq!(stack.len(), 0);
-
 //         // d_weights = input.T @ d_output
 //         unsafe {
 //             // this is only safe iff this GEMM function respects beta == 0 and does not try to read

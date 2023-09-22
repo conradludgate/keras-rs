@@ -6,6 +6,7 @@ use crate::{Arr, GraphBuilder, Initialise, Layer, Scalar, UninitArr};
 
 pub mod relu;
 pub mod sigmoid;
+pub mod softmax;
 
 pub trait Activation {
     type Shape: Dimension + Clone;
