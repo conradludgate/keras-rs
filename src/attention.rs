@@ -4,12 +4,15 @@ use std::mem::MaybeUninit;
 
 use ndarray::{
     linalg::general_mat_mul, s, ArrayBase, ArrayView, ArrayViewMut, Axis, Data, Dimension,
-    IntoDimension, Ix1, Ix2, Ix3, RawData, ViewRepr,
+    IntoDimension, Ix1, Ix2, Ix3, LinalgScalar, RawData, ViewRepr,
 };
 use rand::Rng;
 use rand_distr::{Distribution, Normal, StandardNormal};
 
-use crate::{Arr, GraphBuilder, Initialise, Scalar, Slice, TrainableLayer, UninitArr, UninitRepr};
+use crate::{
+    activation::{softmax::Softmax, Activation},
+    Arr, GraphBuilder, Initialise, Scalar, Slice, TrainableLayer, UninitArr, UninitRepr,
+};
 
 impl Layer {
     pub fn output(shape: impl IntoDimension<Dim = Ix1>) -> Builder {
@@ -42,6 +45,25 @@ impl GraphBuilder for Builder {
 pub struct Layer {
     input_shape: Ix2,
     output_shape: Ix2,
+}
+
+fn gemm0b<'c, A, S1, S2>(
+    alpha: A,
+    a: &ArrayBase<S1, Ix2>,
+    b: &ArrayBase<S2, Ix2>,
+    c: &'c mut [MaybeUninit<A>],
+) -> ArrayViewMut<'c, A, Ix2>
+where
+    S1: Data<Elem = A>,
+    S2: Data<Elem = A>,
+    A: LinalgScalar,
+{
+    let c = ArrayViewMut::from_shape([a.shape()[0], b.shape()[1]], c).unwrap();
+    // SAFETY: not sure, but we aren't going to be reading from k :eyes:
+    // should not introduce any invalid refs
+    let mut c = unsafe { c.assume_init() };
+    general_mat_mul(alpha, a, b, A::zero(), &mut c);
+    c
 }
 
 impl crate::Layer for Layer {
@@ -104,31 +126,19 @@ impl crate::Layer for Layer {
         let (q, soft) = rest.split_at_mut(hidden_size);
         debug_assert_eq!(soft.len(), history_size);
 
-        let v = ArrayViewMut::from_shape([history_size, hidden_size], v).unwrap();
-        let k = ArrayViewMut::from_shape([history_size, hidden_size], k).unwrap();
-        let q = ArrayViewMut::from_shape([1, hidden_size], q).unwrap();
-        let soft = ArrayViewMut::from_shape([1, history_size], soft).unwrap();
-
         let x = input
             .view()
             .into_shape([batch_size * history_size, embedding_size])
             .unwrap();
 
-        // SAFETY: not sure, but we aren't going to be reading from k :eyes:
-        // should not introduce any invalid refs
-        let mut v = unsafe { v.assume_init() };
-        let mut k = unsafe { k.assume_init() };
-        let mut q = unsafe { q.assume_init() };
-        let mut soft = unsafe { soft.assume_init() };
-
-        general_mat_mul(F::one(), &x, &state.value, F::zero(), &mut v);
-        general_mat_mul(F::one(), &x, &state.key, F::zero(), &mut k);
+        let v = gemm0b(F::one(), &x, &state.value, v);
+        let k = gemm0b(F::one(), &x, &state.key, k);
 
         let scale = F::from_usize(hidden_size).unwrap().sqrt().recip();
         for i in 0..history_size {
             let xi = input.slice(s![.., i, ..]);
-            general_mat_mul(F::one(), &xi, &state.query, F::zero(), &mut q);
-            general_mat_mul(scale, &q, &k.t(), F::zero(), &mut soft);
+            let q = gemm0b(F::one(), &xi, &state.query, q);
+            let mut soft = gemm0b(scale, &q, &k.t(), soft);
 
             soft.map_inplace(|x| *x = x.exp());
             let sum = soft.sum_axis(Axis(1));
