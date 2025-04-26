@@ -1,8 +1,6 @@
-use std::mem::MaybeUninit;
-
 use ndarray::{ArrayBase, Data, Dimension, IntoDimension, Ix1, Ix2, ViewRepr};
 
-use crate::{Arr, Scalar, Slice, TrainableLayer, UninitArr, UninitRepr};
+use crate::{Arr, ArrViewMut, MutRepr, Scalar, Slice, TrainableLayer};
 
 use super::{Activation, ActivationLayer};
 
@@ -13,11 +11,11 @@ impl Activation for Sigmoid {
 
     fn apply<F: Scalar>(
         input: Arr<impl Data<Elem = F>, Self::Shape>,
-        mut output: UninitArr<F, Self::Shape>,
+        mut output: ArrViewMut<F, Self::Shape>,
     ) {
         let one = F::one();
         output.zip_mut_with(&input, |o, &i| {
-            o.write(one / (one + (-i).exp()));
+            *o = one / (one + (-i).exp());
         });
     }
 
@@ -44,9 +42,9 @@ impl TrainableLayer for ActivationLayer<Sigmoid> {
         &self,
         _state: Self::State<ndarray::ViewRepr<&F>>,
         input: Arr<impl Data<Elem = F>, Self::InputShape>,
-        mut output: UninitArr<F, Self::OutputShape>,
-        _stack: &mut [MaybeUninit<F>],
-        train_state: &mut Self::TrainState<UninitRepr<F>>,
+        mut output: ArrViewMut<F, Self::OutputShape>,
+        _stack: &mut [F],
+        train_state: &mut Self::TrainState<MutRepr<F>>,
     ) {
         Sigmoid::apply(input, output.view_mut());
         output.assign_to(train_state);
@@ -55,15 +53,14 @@ impl TrainableLayer for ActivationLayer<Sigmoid> {
     fn backward<F: Scalar>(
         &self,
         _state: Self::State<ndarray::ViewRepr<&F>>,
-        _d_state: Self::State<UninitRepr<F>>,
+        _d_state: Self::State<MutRepr<F>>,
         train_state: Self::TrainState<ViewRepr<&F>>,
         d_output: Arr<impl Data<Elem = F>, Self::OutputShape>,
-        mut d_input: UninitArr<F, Self::InputShape>,
-        stack: &mut [MaybeUninit<F>],
+        mut d_input: ArrViewMut<F, Self::InputShape>,
+        stack: &mut [F],
     ) {
         debug_assert_eq!(stack.len(), 0);
         d_output.assign_to(d_input.view_mut());
-        let mut d_input = unsafe { d_input.assume_init() };
         d_input.zip_mut_with(&train_state, |di, &f| *di = *di * f * (-f + F::one()));
     }
 }

@@ -1,8 +1,6 @@
-use std::mem::MaybeUninit;
-
 use ndarray::{ArrayBase, Data, Dimension, IntoDimension, Ix1, Ix2, ViewRepr};
 
-use crate::{Arr, Scalar, Slice, TrainableLayer, UninitArr, UninitRepr};
+use crate::{Arr, ArrViewMut, MutRepr, Scalar, Slice, TrainableLayer};
 
 use super::{Activation, ActivationLayer};
 
@@ -13,11 +11,11 @@ impl Activation for Relu {
 
     fn apply<F: Scalar>(
         input: Arr<impl Data<Elem = F>, Self::Shape>,
-        mut output: UninitArr<F, Self::Shape>,
+        mut output: ArrViewMut<F, Self::Shape>,
     ) {
         let zero = F::zero();
         output.zip_mut_with(&input, |o, i| {
-            o.write(i.max(zero));
+            *o = i.max(zero);
         });
     }
 
@@ -45,11 +43,10 @@ impl TrainableLayer for ActivationLayer<Relu> {
         &self,
         _state: Self::State<ndarray::ViewRepr<&F>>,
         input: Arr<impl Data<Elem = F>, Self::InputShape>,
-        output: UninitArr<F, Self::OutputShape>,
-        stack: &mut [MaybeUninit<F>],
-        train_state: &mut Self::TrainState<UninitRepr<F>>,
+        output: ArrViewMut<F, Self::OutputShape>,
+        _stack: &mut [F],
+        train_state: &mut Self::TrainState<MutRepr<F>>,
     ) {
-        debug_assert_eq!(stack.len(), 0);
         input.assign_to(train_state);
         Relu::apply(input, output);
     }
@@ -57,15 +54,14 @@ impl TrainableLayer for ActivationLayer<Relu> {
     fn backward<F: Scalar>(
         &self,
         _state: Self::State<ndarray::ViewRepr<&F>>,
-        _d_state: Self::State<UninitRepr<F>>,
+        _d_state: Self::State<MutRepr<F>>,
         train_state: Self::TrainState<ViewRepr<&F>>,
         d_output: Arr<impl Data<Elem = F>, Self::OutputShape>,
-        mut d_input: UninitArr<F, Self::InputShape>,
-        stack: &mut [MaybeUninit<F>],
+        mut d_input: ArrViewMut<F, Self::InputShape>,
+        stack: &mut [F],
     ) {
         debug_assert_eq!(stack.len(), 0);
         d_output.assign_to(d_input.view_mut());
-        let mut d_input = unsafe { d_input.assume_init() };
         d_input.zip_mut_with(&train_state, |di, &f| {
             *di = *di * f.signum().max(F::zero());
         });

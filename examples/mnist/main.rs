@@ -19,6 +19,7 @@ fn main() {
     // Load MNIST data set
     let data = parse::load_data();
     let training_data = process_data(&data.training);
+    let testing_data = process_data(&data.testing);
 
     // Create a new compute graph which uses three Dense components
     // With the input having size 28*28 and the output having size 10
@@ -53,6 +54,9 @@ fn main() {
         costs.push(dbg!(cost));
     }
 
+    let cost = trainer.test_epoch(testing_data.0.view(), testing_data.1.view());
+    dbg!(cost);
+
     // let graph = trainer.graph;
 
     // // let file = hdf5::File::create("mnist.h5").unwrap();
@@ -66,7 +70,7 @@ fn main() {
 
     let output = trainer
         .as_model()
-        .apply(input.into_shape((1, 28 * 28)).unwrap());
+        .apply_batch(input.into_shape_with_order((1, 28 * 28)).unwrap());
     println!("output: {:?}", output);
     println!("expected: {:?}", expected);
 }

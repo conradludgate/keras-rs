@@ -11,7 +11,7 @@ use rand_distr::{Distribution, Normal, StandardNormal};
 
 use crate::{
     activation::{softmax::Softmax, Activation},
-    Arr, GraphBuilder, Initialise, Scalar, Slice, TrainableLayer, UninitArr, UninitRepr,
+    Arr, GraphBuilder, Initialise, Scalar, Slice, TrainableLayer, ArrViewMut, MutRepr,
 };
 
 impl Layer {
@@ -110,8 +110,8 @@ impl crate::Layer for Layer {
         &self,
         state: Self::State<ViewRepr<&F>>,
         input: Arr<impl Data<Elem = F>, Self::InputShape>,
-        mut output: UninitArr<F, Self::OutputShape>,
-        stack: &mut [MaybeUninit<F>],
+        mut output: ArrViewMut<F, Self::OutputShape>,
+        stack: &mut [F],
     ) {
         let (batch_size, history_size, embedding_size) = input.raw_dim().into_pattern();
         let (_, hidden_size) = self.output_shape.into_pattern();
@@ -185,9 +185,9 @@ where
 //         &self,
 //         state: Self::State<ViewRepr<&F>>,
 //         input: Arr<impl Data<Elem = F>, Self::InputShape>,
-//         output: UninitArr<F, Self::OutputShape>,
-//         _stack: &mut [MaybeUninit<F>],
-//         train_state: &mut Self::TrainState<UninitRepr<F>>,
+//         output: ArrViewMut<F, Self::OutputShape>,
+//         _stack: &mut [F],
+//         train_state: &mut Self::TrainState<MutRepr<F>>,
 //     ) {
 //         use crate::Layer;
 //         // input.assign_to(train_state);
@@ -197,11 +197,11 @@ where
 //     fn backward<F: Scalar>(
 //         &self,
 //         state: Self::State<ViewRepr<&F>>,
-//         d_state: Self::State<crate::UninitRepr<F>>,
+//         d_state: Self::State<crate::MutRepr<F>>,
 //         train_state: Self::TrainState<ViewRepr<&F>>,
 //         d_output: Arr<impl Data<Elem = F>, Self::OutputShape>,
-//         d_input: UninitArr<F, Self::InputShape>,
-//         stack: &mut [MaybeUninit<F>],
+//         d_input: ArrViewMut<F, Self::InputShape>,
+//         stack: &mut [F],
 //     ) {
 //         // d_weights = input.T @ d_output
 //         unsafe {

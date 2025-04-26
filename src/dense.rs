@@ -1,11 +1,13 @@
 use ndarray::{
-    linalg::general_mat_mul, ArrayBase, Axis, Data, Dimension, IntoDimension, Ix1, Ix2, RawData,
-    ViewRepr,
+    linalg::general_mat_mul, ArrayBase, Data, Dimension, IntoDimension, Ix1, Ix2, RawData, ViewRepr,
 };
 use rand::Rng;
 use rand_distr::{Distribution, Normal, StandardNormal};
 
-use crate::{Arr, ArrViewMut, GraphBuilder, Initialise, MutRepr, Scalar, Slice, TrainableLayer};
+use crate::{
+    Arr, ArrViewMut, GraphBuilder, Initialise, Layer as ModelLayer, MutRepr, Scalar, Slice,
+    TrainableLayer,
+};
 
 impl Layer {
     pub fn output(shape: impl IntoDimension<Dim = Ix1>) -> Builder {
@@ -39,11 +41,11 @@ pub struct Layer {
     output_shape: Ix1,
 }
 
-impl crate::Layer for Layer {
+impl ModelLayer for Layer {
     type InputShape = Ix1;
     type OutputShape = Ix1;
 
-    type State<S: RawData> = LinearState<S>;
+    type State<S: RawData> = DenseState<S>;
 
     fn size(&self) -> usize {
         let i = self.input_shape.into_pattern();
@@ -67,10 +69,8 @@ impl crate::Layer for Layer {
         let i = self.input_shape.into_pattern();
         let o = self.output_shape.into_pattern();
 
-        let (weights, biases) = data.split(i * o);
-        let weights = weights.into_array([i, o]);
-        let biases = biases.into_array(o);
-        LinearState { weights, biases }
+        let weights = data.into_array([i, o]);
+        DenseState { weights }
     }
 
     fn apply<F: Scalar>(
@@ -80,7 +80,7 @@ impl crate::Layer for Layer {
         mut output: ArrViewMut<F, Self::OutputShape>,
         stack: &mut [F],
     ) {
-        let (batch_size, input_size) = input.raw_dim().into_pattern();
+        let (_, input_size) = input.raw_dim().into_pattern();
         debug_assert_eq!(stack.len(), 0);
         debug_assert_eq!(
             input_size,
@@ -88,13 +88,7 @@ impl crate::Layer for Layer {
             "input size should match specified size for the model"
         );
 
-        state
-            .biases
-            .broadcast([batch_size, self.output_shape.into_pattern()])
-            .unwrap()
-            .assign_to(output.view_mut());
-
-        general_mat_mul(F::one(), &input, &state.weights, F::one(), &mut output);
+        general_mat_mul(F::one(), &input, &state.weights, F::zero(), &mut output);
     }
 }
 
@@ -110,7 +104,6 @@ where
         state.weights.map_inplace(|w| {
             *w = dist.sample(rng);
         });
-        state.biases.fill(F::zero());
     }
 }
 
@@ -125,8 +118,8 @@ impl TrainableLayer for Layer {
         data.into_array([batch_size, self.input_shape.into_pattern()])
     }
 
-    fn train_stack_space(&self, _batch_size: usize) -> usize {
-        0
+    fn train_stack_space(&self, batch_size: usize) -> usize {
+        self.stack_space(batch_size) + 0
     }
 
     fn forward<F: Scalar>(
@@ -134,12 +127,11 @@ impl TrainableLayer for Layer {
         state: Self::State<ViewRepr<&F>>,
         input: Arr<impl Data<Elem = F>, Self::InputShape>,
         output: ArrViewMut<F, Self::OutputShape>,
-        _stack: &mut [F],
+        stack: &mut [F],
         train_state: &mut Self::TrainState<MutRepr<F>>,
     ) {
-        use crate::Layer;
         input.assign_to(train_state);
-        self.apply(state, input, output, &mut []);
+        self.apply(state, input, output, stack);
     }
 
     fn backward<F: Scalar>(
@@ -167,15 +159,6 @@ impl TrainableLayer for Layer {
             );
         }
 
-        // d_biases = d_output.mean(axis = 0)
-        {
-            d_output
-                .view()
-                .mean_axis(Axis(0))
-                .unwrap()
-                .assign_to(d_state.biases);
-        }
-
         // d_input = d_output @ weights.T
         {
             // this is only safe iff this GEMM function respects beta == 0 and does not try to read
@@ -192,7 +175,6 @@ impl TrainableLayer for Layer {
     }
 }
 
-pub struct LinearState<S: RawData> {
+pub struct DenseState<S: RawData> {
     weights: ArrayBase<S, Ix2>,
-    biases: ArrayBase<S, Ix1>,
 }

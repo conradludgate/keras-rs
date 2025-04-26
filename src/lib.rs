@@ -1,6 +1,8 @@
-use std::{mem::MaybeUninit, ops::Neg};
+#![allow(unused_mut, reason = "rust analyzer is broken")]
 
-use model::{fill, Model};
+use std::ops::Neg;
+
+use model::Model;
 use named::Named;
 use ndarray::{
     ArrayBase, Data, Dimension, IntoDimension, LinalgScalar, RawData, ScalarOperand, ViewRepr,
@@ -9,9 +11,10 @@ use rand::{thread_rng, Rng};
 use rand_distr::num_traits::{Float, FromPrimitive};
 
 pub mod activation;
+// pub mod attention;
 pub mod cost;
+pub mod dense;
 pub mod embedding;
-pub mod attention;
 pub mod linear;
 pub mod model;
 pub mod named;
@@ -20,9 +23,7 @@ pub mod optimise;
 
 /// Type representing a simple ArrayBase, but dimension larger to account for batches
 pub type Arr<S, D> = ndarray::ArrayBase<S, <D as Dimension>::Larger>;
-pub type UninitRepr<'f, F> = ViewRepr<&'f mut MaybeUninit<F>>;
 pub type MutRepr<'f, F> = ViewRepr<&'f mut F>;
-pub type UninitArr<'f, F, D> = Arr<UninitRepr<'f, F>, D>;
 pub type OwnedArr<F, D> = Arr<ndarray::OwnedRepr<F>, D>;
 pub type ArrView<'a, F, D> = Arr<ViewRepr<&'a F>, D>;
 pub type ArrViewMut<'a, F, D> = Arr<MutRepr<'a, F>, D>;
@@ -49,14 +50,9 @@ pub trait GraphBuilder: Sized {
         let layer = self.with_input_shape(input_shape.into_dimension());
         let len = layer.size();
 
-        let mut data = Vec::with_capacity(len);
+        let mut data = vec![F::zero(); len];
 
-        unsafe {
-            fill(&mut data, len, |data| {
-                let mut uninit = layer.view_state(data);
-                layer.init(&mut thread_rng(), &mut uninit);
-            });
-        }
+        layer.init(&mut thread_rng(), layer.view_state(&mut data[..]));
 
         Model { layer, data }
     }
@@ -125,15 +121,13 @@ pub trait Layer {
         &self,
         state: Self::State<ViewRepr<&F>>,
         input: Arr<impl Data<Elem = F>, Self::InputShape>,
-        output: UninitArr<F, Self::OutputShape>,
-        stack: &mut [MaybeUninit<F>],
+        output: ArrViewMut<F, Self::OutputShape>,
+        stack: &mut [F],
     );
 }
 
-/// # Safety
-/// init should initialise all values in the state
-pub unsafe trait Initialise<F: Scalar>: Layer {
-    fn init(&self, rng: &mut impl Rng, state: &mut Self::State<UninitRepr<F>>);
+pub trait Initialise<F: Scalar>: Layer {
+    fn init(&self, rng: &mut impl Rng, state: Self::State<MutRepr<F>>);
 }
 
 pub trait TrainableLayer: Layer {
@@ -146,18 +140,18 @@ pub trait TrainableLayer: Layer {
         &self,
         state: Self::State<ViewRepr<&F>>,
         input: Arr<impl Data<Elem = F>, Self::InputShape>,
-        output: UninitArr<F, Self::OutputShape>,
-        stack: &mut [MaybeUninit<F>],
-        train_state: &mut Self::TrainState<UninitRepr<F>>,
+        output: ArrViewMut<F, Self::OutputShape>,
+        stack: &mut [F],
+        train_state: &mut Self::TrainState<MutRepr<F>>,
     );
 
     fn backward<F: Scalar>(
         &self,
         state: Self::State<ViewRepr<&F>>,
-        d_state: Self::State<UninitRepr<F>>,
+        d_state: Self::State<MutRepr<F>>,
         train_state: Self::TrainState<ViewRepr<&F>>,
         d_output: Arr<impl Data<Elem = F>, Self::OutputShape>,
-        d_input: UninitArr<F, Self::InputShape>,
-        stack: &mut [MaybeUninit<F>],
+        d_input: ArrViewMut<F, Self::InputShape>,
+        stack: &mut [F],
     );
 }

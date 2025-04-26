@@ -1,9 +1,7 @@
-use std::mem::MaybeUninit;
-
 use ndarray::{ArrayViewMut, Dimension, ViewRepr};
 use rand::Rng;
 
-use crate::{Arr, GraphBuilder, Initialise, Layer, Scalar, TrainableLayer, UninitArr, UninitRepr};
+use crate::{Arr, ArrViewMut, GraphBuilder, Initialise, Layer, MutRepr, Scalar, TrainableLayer};
 
 impl<G1, G2> GraphBuilder for (G1, G2)
 where
@@ -61,13 +59,13 @@ where
         &self,
         state: Self::State<ndarray::ViewRepr<&F>>,
         input: Arr<impl ndarray::Data<Elem = F>, Self::InputShape>,
-        output: UninitArr<F, Self::OutputShape>,
-        stack: &mut [MaybeUninit<F>],
+        output: ArrViewMut<F, Self::OutputShape>,
+        stack: &mut [F],
     ) {
         let batch_size = input.shape()[0];
         let inner_size = self.0.batched_output_shape(batch_size).size(); // space used by inner output
 
-        let (inner, stack) = stack.split_at_mut(inner_size);
+        let (inner, mut stack) = stack.split_at_mut(inner_size);
         let inner_stack_size = self.0.stack_space(batch_size);
 
         let mut inner =
@@ -80,26 +78,20 @@ where
             &mut stack[..inner_stack_size],
         );
 
-        let inner = unsafe { inner.assume_init() };
-
         let outer_stack_size = self.1.stack_space(batch_size);
         self.1
             .apply(state.1, inner, output, &mut stack[..outer_stack_size])
     }
 }
 
-unsafe impl<F: Scalar, L1, L2> Initialise<F> for (L1, L2)
+impl<F: Scalar, L1, L2> Initialise<F> for (L1, L2)
 where
     L1: Layer + Initialise<F>,
     L2: Layer<InputShape = L1::OutputShape> + Initialise<F>,
 {
-    fn init(
-        &self,
-        rng: &mut impl Rng,
-        state: &mut Self::State<ndarray::ViewRepr<&mut std::mem::MaybeUninit<F>>>,
-    ) {
-        self.0.init(rng, &mut state.0);
-        self.1.init(rng, &mut state.1);
+    fn init(&self, rng: &mut impl Rng, state: Self::State<ndarray::ViewRepr<&mut F>>) {
+        self.0.init(rng, state.0);
+        self.1.init(rng, state.1);
     }
 }
 
@@ -138,15 +130,15 @@ where
         &self,
         state: Self::State<ndarray::ViewRepr<&F>>,
         input: Arr<impl ndarray::Data<Elem = F>, Self::InputShape>,
-        output: UninitArr<F, Self::OutputShape>,
-        stack: &mut [MaybeUninit<F>],
-        train_state: &mut Self::TrainState<UninitRepr<F>>,
+        output: ArrViewMut<F, Self::OutputShape>,
+        stack: &mut [F],
+        train_state: &mut Self::TrainState<MutRepr<F>>,
     ) {
         let batch_size = input.shape()[0];
         let inner_size = self.0.batched_output_shape(batch_size).size(); // space used by inner output
         debug_assert_eq!(stack.len(), self.stack_space(batch_size));
 
-        let (inner, stack) = stack.split_at_mut(inner_size);
+        let (inner, mut stack) = stack.split_at_mut(inner_size);
         let inner_stack_size = self.0.stack_space(batch_size);
 
         let mut inner =
@@ -159,8 +151,6 @@ where
             &mut stack[..inner_stack_size],
             &mut train_state.0,
         );
-
-        let inner = unsafe { inner.assume_init() };
 
         let outer_stack_size = self.1.stack_space(batch_size);
         self.1.forward(
@@ -175,17 +165,17 @@ where
     fn backward<F: Scalar>(
         &self,
         state: Self::State<ndarray::ViewRepr<&F>>,
-        d_state: Self::State<crate::UninitRepr<F>>,
+        d_state: Self::State<crate::MutRepr<F>>,
         train_state: Self::TrainState<ViewRepr<&F>>,
         d_output: Arr<impl ndarray::Data<Elem = F>, Self::OutputShape>,
-        d_input: UninitArr<F, Self::InputShape>,
-        stack: &mut [MaybeUninit<F>],
+        d_input: ArrViewMut<F, Self::InputShape>,
+        stack: &mut [F],
     ) {
         let batch_size = d_output.shape()[0];
         let inner_size = self.0.batched_output_shape(batch_size).size(); // space used by inner output
         debug_assert_eq!(stack.len(), self.train_stack_space(batch_size));
 
-        let (inner, stack) = stack.split_at_mut(inner_size);
+        let (inner, mut stack) = stack.split_at_mut(inner_size);
         let inner_stack_size = self.1.train_stack_space(batch_size);
 
         let mut inner =
@@ -199,8 +189,6 @@ where
             inner.view_mut(),
             &mut stack[..inner_stack_size],
         );
-
-        let inner = unsafe { inner.assume_init() };
 
         let outer_stack_size = self.0.train_stack_space(batch_size);
         self.0.backward(

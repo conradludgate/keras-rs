@@ -1,11 +1,9 @@
-use std::mem::MaybeUninit;
-
 use ndarray::{
     linalg::{general_mat_mul, general_mat_vec_mul},
     ArrayBase, ArrayViewMut, Axis, Data, Dimension, IntoDimension, Ix1, Ix2, ViewRepr,
 };
 
-use crate::{Arr, Scalar, Slice, TrainableLayer, UninitArr, UninitRepr};
+use crate::{Arr, ArrViewMut, MutRepr, Scalar, Slice, TrainableLayer};
 
 use super::{Activation, ActivationLayer};
 
@@ -16,12 +14,11 @@ impl Activation for Softmax {
 
     fn apply<F: Scalar>(
         input: Arr<impl Data<Elem = F>, Self::Shape>,
-        mut output: UninitArr<F, Self::Shape>,
+        mut output: ArrViewMut<F, Self::Shape>,
     ) {
         output.zip_mut_with(&input, |x, y| {
-            x.write(y.exp());
+            *x = y.exp();
         });
-        let mut output = unsafe { output.assume_init() };
         let sum = output.sum_axis(Axis(1));
         output.zip_mut_with(&sum, |x, y| *x = *x / *y);
     }
@@ -49,9 +46,9 @@ impl TrainableLayer for ActivationLayer<Softmax> {
         &self,
         _state: Self::State<ndarray::ViewRepr<&F>>,
         input: Arr<impl Data<Elem = F>, Self::InputShape>,
-        mut output: UninitArr<F, Self::OutputShape>,
-        _stack: &mut [MaybeUninit<F>],
-        train_state: &mut Self::TrainState<UninitRepr<F>>,
+        mut output: ArrViewMut<F, Self::OutputShape>,
+        _stack: &mut [F],
+        train_state: &mut Self::TrainState<MutRepr<F>>,
     ) {
         Softmax::apply(input, output.view_mut());
         output.assign_to(train_state);
@@ -60,11 +57,11 @@ impl TrainableLayer for ActivationLayer<Softmax> {
     fn backward<F: Scalar>(
         &self,
         _state: Self::State<ndarray::ViewRepr<&F>>,
-        _d_state: Self::State<UninitRepr<F>>,
+        _d_state: Self::State<MutRepr<F>>,
         train_state: Self::TrainState<ViewRepr<&F>>,
         d_output: Arr<impl Data<Elem = F>, Self::OutputShape>,
-        d_input: UninitArr<F, Self::InputShape>,
-        stack: &mut [MaybeUninit<F>],
+        mut d_input: ArrViewMut<F, Self::InputShape>,
+        stack: &mut [F],
     ) {
         let n = self.shape.into_pattern();
 
@@ -81,21 +78,18 @@ impl TrainableLayer for ActivationLayer<Softmax> {
         // y_bi = softmax(x_bi) = exp(x_bi) / sum(exp(x_bj))
         // dy_bi/dx_bij = y_bj * (Dij - y_bi)
 
-        let mut d_input = unsafe { d_input.assume_init() };
-
         let output_iter = train_state.axis_iter(Axis(0));
         let d_output_iter = d_output.axis_iter(Axis(0));
         let d_input_iter = d_input.axis_iter_mut(Axis(0));
 
-        let scratch = ArrayViewMut::from_shape([n, n], stack).unwrap();
-        let mut scratch = unsafe { scratch.assume_init() };
+        let mut scratch = ArrayViewMut::from_shape([n, n], stack).unwrap();
 
         // TODO: can we elimintate this for loop?
 
         for ((output, mut d_input), d_output) in
             std::iter::zip(output_iter, d_input_iter).zip(d_output_iter)
         {
-            let s = output.into_shape([output.len(), 1]).unwrap();
+            let s = output.into_shape_with_order([output.len(), 1]).unwrap();
             general_mat_mul(-F::one(), &s, &s.t(), F::zero(), &mut scratch);
             scratch
                 .diag_mut()

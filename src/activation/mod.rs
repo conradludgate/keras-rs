@@ -1,8 +1,6 @@
-use std::mem::MaybeUninit;
-
 use ndarray::{Data, Dimension};
 
-use crate::{Arr, GraphBuilder, Initialise, Layer, Scalar, UninitArr};
+use crate::{Arr, ArrViewMut, GraphBuilder, Initialise, Layer, Scalar};
 
 pub mod relu;
 pub mod sigmoid;
@@ -13,7 +11,7 @@ pub trait Activation {
 
     fn apply<F: crate::Scalar>(
         input: Arr<impl Data<Elem = F>, Self::Shape>,
-        output: UninitArr<F, Self::Shape>,
+        output: ArrViewMut<F, Self::Shape>,
     );
 
     fn batch(shape: Self::Shape, batch_size: usize) -> <Self::Shape as Dimension>::Larger;
@@ -60,20 +58,14 @@ impl<A: Activation> Layer for ActivationLayer<A> {
         &self,
         _state: Self::State<ndarray::ViewRepr<&F>>,
         input: Arr<impl Data<Elem = F>, Self::InputShape>,
-        output: UninitArr<F, Self::OutputShape>,
-        stack: &mut [MaybeUninit<F>],
+        output: ArrViewMut<F, Self::OutputShape>,
+        stack: &mut [F],
     ) {
         debug_assert_eq!(stack.len(), 0);
         A::apply(input, output)
     }
 }
 
-unsafe impl<F: Scalar, A: Activation> Initialise<F> for ActivationLayer<A> {
-    fn init(
-        &self,
-        _rng: &mut impl rand::Rng,
-        state: &mut Self::State<ndarray::ViewRepr<&mut std::mem::MaybeUninit<F>>>,
-    ) {
-        debug_assert_eq!(std::mem::size_of_val(state), 0);
-    }
+impl<F: Scalar, A: Activation> Initialise<F> for ActivationLayer<A> {
+    fn init(&self, _rng: &mut impl rand::Rng, _state: Self::State<ndarray::ViewRepr<&mut F>>) {}
 }

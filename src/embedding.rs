@@ -1,8 +1,6 @@
-use std::mem::MaybeUninit;
-
 use ndarray::{ArrayBase, Axis, Data, Dimension, IntoDimension, Ix1, Ix2, ViewRepr};
 
-use crate::{Arr, GraphBuilder, Layer, Scalar, Slice, UninitArr};
+use crate::{Arr, ArrViewMut, GraphBuilder, Layer, Scalar, Slice};
 
 pub struct Embedding {
     pub input_dim: usize,
@@ -64,8 +62,8 @@ impl Layer for EmbeddingLayer {
         &self,
         state: Self::State<ViewRepr<&F>>,
         input: Arr<impl Data<Elem = F>, Self::InputShape>,
-        mut output: UninitArr<F, Self::OutputShape>,
-        _stack: &mut [MaybeUninit<F>],
+        mut output: ArrViewMut<F, Self::OutputShape>,
+        _stack: &mut [F],
     ) {
         let (batch_size, timesteps) = input.raw_dim().into_pattern();
         debug_assert_eq!(timesteps, self.timesteps);
