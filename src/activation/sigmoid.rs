@@ -1,39 +1,68 @@
 use ndarray::{Ix0, Ix1};
 
-use crate::{Backprop, BackpropShape, BackpropShapes, Batch, Initialise, Scalar, View};
+use crate::{
+    Backprop, BackpropShape, Batch, Inference, Initialise, ModelShape, ModelShapes, Scalar,
+};
+
+type Input<R> = Batch<Ix1, R>;
+type Output<R> = crate::Output<Ix1, Sigmoid, R>;
+type Cache<R> = crate::TrainingCache<Ix1, Sigmoid, R>;
+type Params<R> = crate::Params<Ix1, Sigmoid, R>;
 
 #[derive(Debug, Copy, Clone)]
 pub struct Sigmoid;
 
-impl BackpropShape for Sigmoid {
+impl ModelShape<Ix1> for Sigmoid {
     type Params = Ix0;
-    type Input = Ix1;
     type Output = Ix1;
-    type Cache = Ix1;
 
-    fn shape(self, input: Self::Input) -> BackpropShapes<Self> {
-        BackpropShapes {
+    fn shape(self, input: Ix1) -> ModelShapes<Ix1, Self> {
+        ModelShapes {
             params: Ix0(),
             output: input,
-            cache: input,
             stack_size: 0,
         }
     }
 }
 
-impl<F: Scalar> Initialise<F> for Sigmoid {
-    fn init(&self, _: &mut impl rand::Rng, _: View<Self::Params, &mut F>) {}
+impl BackpropShape<Ix1> for Sigmoid {
+    type TrainingCache = Ix1;
+
+    fn shape_with_cache(self, input: Ix1) -> (ModelShapes<Ix1, Self>, Self::TrainingCache) {
+        (self.shape(input), input)
+    }
 }
 
-impl<F: Scalar> Backprop<F> for Sigmoid {
+impl<F: Scalar> Initialise<Ix1, F> for Sigmoid {
+    fn init(&self, _: &mut impl rand::Rng, _: Params<&mut F>) {}
+}
+
+impl<F: Scalar> Inference<Ix1, F> for Sigmoid {
+    fn infer(
+        self,
+        _: Ix1,
+        _: usize,
+        _: Params<&F>,
+        input: Input<&F>,
+        output: Output<&mut F>,
+        _: &mut [F],
+    ) {
+        let one = F::one();
+        ndarray::azip!((input in input, output in output) {
+            *output = one / (one + (-*input).exp());
+        });
+    }
+}
+
+impl<F: Scalar> Backprop<Ix1, F> for Sigmoid {
     fn forward(
         self,
-        _: Self::Input,
+        _: Ix1,
         _: usize,
-        _: View<Self::Params, &F>,
-        input: Batch<Self::Input, &F>,
-        mut output: Batch<Self::Output, &mut F>,
-        cache: Batch<Self::Cache, &mut F>,
+        _: Params<&F>,
+        input: Input<&F>,
+        output: Output<&mut F>,
+        cache: Cache<&mut F>,
         _: &mut [F],
     ) {
         let one = F::one();
@@ -45,13 +74,13 @@ impl<F: Scalar> Backprop<F> for Sigmoid {
 
     fn backward(
         self,
-        _: Self::Input,
+        _: Ix1,
         _: usize,
-        _: View<Self::Params, &F>,
-        de_doutput: Batch<Self::Output, &F>,
-        mut de_dinput: Batch<Self::Input, &mut F>,
-        _: View<Self::Params, &mut F>,
-        cache: Batch<Self::Cache, &F>,
+        _: Params<&F>,
+        de_doutput: Output<&F>,
+        de_dinput: Input<&mut F>,
+        _: Params<&mut F>,
+        cache: Cache<&F>,
         _: &mut [F],
     ) {
         ndarray::azip!((di in de_dinput, &out in de_doutput, &f in cache) {

@@ -3,9 +3,14 @@ use rand::Rng;
 use rand_distr::{Distribution, Normal, StandardNormal};
 
 use crate::{
-    Backprop, BackpropShape, BackpropShapes, Cache, Initialise, Input, Output, Params, Scalar,
-    Shape, Slice, View,
+    Backprop, BackpropShape, Batch, Inference, Initialise, ModelShape, ModelShapes, Scalar, Shape,
+    Slice, View,
 };
+
+type Input<R> = Batch<Ix1, R>;
+type Output<R> = super::Output<Ix1, Linear, R>;
+type TrainingCache<R> = super::TrainingCache<Ix1, Linear, R>;
+type Params<R> = super::Params<Ix1, Linear, R>;
 
 #[derive(Clone, Copy)]
 pub struct Linear {
@@ -26,11 +31,11 @@ pub struct Layer {
     output_shape: Ix1,
 }
 
-impl<F: Scalar> Initialise<F> for Linear
+impl<F: Scalar> Initialise<Ix1, F> for Linear
 where
     StandardNormal: Distribution<F>,
 {
-    fn init(&self, rng: &mut impl Rng, mut state: Params<Self, &mut F>) {
+    fn init(&self, rng: &mut impl Rng, mut state: Params<&mut F>) {
         let inputs = F::from_usize(state.weights.shape()[0]).unwrap();
 
         let var = F::one() / inputs;
@@ -68,36 +73,91 @@ impl Shape for Layer {
         let biases = biases.into_array(o);
         LinearState { weights, biases }
     }
+
+    #[inline]
+    fn assign_to<F: Copy>(
+        self,
+        mut dst: Self::Base<ndarray::ViewRepr<&mut F>>,
+        src: Self::Base<ndarray::ViewRepr<&F>>,
+    ) {
+        dst.weights.assign(&src.weights);
+        dst.biases.assign(&src.biases);
+    }
+
+    #[inline]
+    fn as_ref<'a, T>(
+        self,
+        s: &'a Self::Base<ndarray::ViewRepr<&T>>,
+    ) -> Self::Base<ndarray::ViewRepr<&'a T>> {
+        LinearState {
+            weights: s.weights.view(),
+            biases: s.biases.view(),
+        }
+    }
+
+    #[inline]
+    fn as_mut<'a, T>(
+        self,
+        s: &'a mut Self::Base<ndarray::ViewRepr<&mut T>>,
+    ) -> Self::Base<ndarray::ViewRepr<&'a mut T>> {
+        LinearState {
+            weights: s.weights.view_mut(),
+            biases: s.biases.view_mut(),
+        }
+    }
 }
 
-impl BackpropShape for Linear {
+impl ModelShape<Ix1> for Linear {
     type Params = Layer;
-    type Input = Ix1;
     type Output = Ix1;
-    type Cache = Ix1;
 
-    fn shape(self, input: Self::Input) -> BackpropShapes<Self> {
-        BackpropShapes {
+    fn shape(self, input: Ix1) -> ModelShapes<Ix1, Self> {
+        ModelShapes {
             params: Layer {
                 input_shape: input,
                 output_shape: self.output_shape,
             },
             output: self.output_shape,
-            cache: input,
             stack_size: 0,
         }
     }
 }
 
-impl<F: Scalar> Backprop<F> for Linear {
+impl BackpropShape<Ix1> for Linear {
+    type TrainingCache = Ix1;
+
+    fn shape_with_cache(self, input: Ix1) -> (ModelShapes<Ix1, Self>, Ix1) {
+        (self.shape(input), input)
+    }
+}
+
+impl<F: Scalar> Inference<Ix1, F> for Linear {
+    fn infer(
+        self,
+        _: Ix1,
+        _: usize,
+        p: Params<&F>,
+        in_: Input<&F>,
+        mut out: Output<&mut F>,
+        _: &mut [F],
+    ) {
+        for out in out.axis_iter_mut(Axis(0)) {
+            p.biases.assign_to(out);
+        }
+
+        general_mat_mul(F::one(), &in_, &p.weights, F::one(), &mut out);
+    }
+}
+
+impl<F: Scalar> Backprop<Ix1, F> for Linear {
     fn forward(
         self,
-        _: Self::Input,
+        _: Ix1,
         _: usize,
-        p: Params<Self, &F>,
-        in_: Input<Self, &F>,
-        mut out: Output<Self, &mut F>,
-        c: Cache<Self, &mut F>,
+        p: Params<&F>,
+        in_: Input<&F>,
+        mut out: Output<&mut F>,
+        c: TrainingCache<&mut F>,
         _: &mut [F],
     ) {
         in_.assign_to(c);
@@ -111,13 +171,13 @@ impl<F: Scalar> Backprop<F> for Linear {
 
     fn backward(
         self,
-        _: Self::Input,
+        _: Ix1,
         _: usize,
-        p: Params<Self, &F>,
-        dout: Output<Self, &F>,
-        mut din_: Input<Self, &mut F>,
+        p: Params<&F>,
+        dout: Output<&F>,
+        mut din_: Input<&mut F>,
         mut dp: View<Self::Params, &mut F>,
-        in_: Cache<Self, &F>,
+        in_: TrainingCache<&F>,
         _: &mut [F],
     ) {
         // d_weights = in_.T @ dout

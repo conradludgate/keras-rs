@@ -25,7 +25,7 @@ impl Cost<Ix1> for MSE {
         &self,
         output: ArrayView2<F>,
         expected: ArrayView2<F>,
-        mut diff: ArrayViewMut2<F>,
+        diff: ArrayViewMut2<F>,
     ) -> F {
         debug_assert_eq!(output.shape(), expected.shape());
         debug_assert_eq!(output.shape(), diff.shape());

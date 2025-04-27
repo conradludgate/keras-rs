@@ -2,7 +2,8 @@ use ndarray::RawData;
 use rand::Rng;
 
 use crate::{
-    Backprop, BackpropShape, BackpropShapes, BatchShape, Batched, Initialise, Scalar, Shape, Slice, View,
+    Backprop, BackpropShape, BatchShape, Batched, Inference, Initialise, ModelShape, ModelShapes,
+    Scalar, Shape, Slice, View,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -26,13 +27,42 @@ where
         let (s0, s1) = slice.split(mid);
         Net(self.0.from_slice(s0), self.1.from_slice(s1))
     }
+
+    #[inline]
+    fn assign_to<F: Copy>(
+        self,
+        dst: Self::Base<ndarray::ViewRepr<&mut F>>,
+        src: Self::Base<ndarray::ViewRepr<&F>>,
+    ) {
+        self.0.assign_to(dst.0, src.0);
+        self.1.assign_to(dst.1, src.1);
+    }
+
+    #[inline]
+    fn as_ref<'a, T>(
+        self,
+        s: &'a Self::Base<ndarray::ViewRepr<&T>>,
+    ) -> Self::Base<ndarray::ViewRepr<&'a T>> {
+        Net(self.0.as_ref(&s.0), self.1.as_ref(&s.1))
+    }
+
+    #[inline]
+    fn as_mut<'a, T>(
+        self,
+        s: &'a mut Self::Base<ndarray::ViewRepr<&mut T>>,
+    ) -> Self::Base<ndarray::ViewRepr<&'a mut T>> {
+        Net(self.0.as_mut(&mut s.0), self.1.as_mut(&mut s.1))
+    }
 }
 
-impl<F: Scalar, L0, L1> Initialise<F> for Net<L0, L1>
+impl<F, I, L0, L1> Initialise<I, F> for Net<L0, L1>
 where
-    L0: Initialise<F>,
-    L1: Initialise<F, Input = L0::Output>,
+    F: Scalar,
+    I: BatchShape,
+    L0: Initialise<I, F>,
+    L1: Initialise<L0::Output, F>,
 {
+    #[inline]
     fn init(&self, rng: &mut impl Rng, state: View<Self::Params, &mut F>) {
         self.0.init(rng, state.0);
         self.1.init(rng, state.1);
@@ -50,44 +80,117 @@ where
     fn batched(self, batch: usize) -> Self::Batched {
         Net(self.0.batched(batch), self.1.batched(batch))
     }
+
+    #[inline]
+    fn from_single<R: RawData>(
+        self,
+        base: <Self as Shape>::Base<R>,
+    ) -> <Batched<Self> as Shape>::Base<R> {
+        Net(self.0.from_single(base.0), self.1.from_single(base.1))
+    }
+
+    #[inline]
+    fn get_single<R: RawData>(
+        self,
+        base: <Batched<Self> as Shape>::Base<R>,
+        index: usize,
+    ) -> Self::Base<R> {
+        Net(
+            self.0.get_single(base.0, index),
+            self.1.get_single(base.1, index),
+        )
+    }
+
+    #[inline]
+    fn batches<R: RawData>(self, base: &<Batched<Self> as Shape>::Base<R>) -> usize {
+        self.0.batches(&base.0)
+    }
 }
 
-impl<B0, B1> BackpropShape for Net<B0, B1>
+impl<I, B0, B1> ModelShape<I> for Net<B0, B1>
 where
-    B0: BackpropShape,
-    B1: BackpropShape<Input = B0::Output>,
+    B0: ModelShape<I>,
+    B1: ModelShape<B0::Output>,
 {
     type Params = Net<B0::Params, B1::Params>;
-    type Input = B0::Input;
     type Output = B1::Output;
-    type Cache = Net<B0::Cache, B1::Cache>;
 
-    fn shape(self, input: Self::Input) -> BackpropShapes<Self> {
+    fn shape(self, input: I) -> ModelShapes<I, Self> {
         let shape0 = self.0.shape(input);
         let shape1 = self.1.shape(shape0.output);
-        BackpropShapes {
+        ModelShapes {
             params: Net(shape0.params, shape1.params),
             output: shape1.output,
-            cache: Net(shape0.cache, shape1.cache),
             stack_size: shape0.output.batched(1).size()
                 + usize::max(shape0.stack_size, shape1.stack_size),
         }
     }
 }
 
-impl<F, B0, B1> Backprop<F> for Net<B0, B1>
+impl<I, B0, B1> BackpropShape<I> for Net<B0, B1>
 where
-    B0: Backprop<F>,
-    B1: Backprop<F, Input = B0::Output>,
+    B0: BackpropShape<I>,
+    B1: BackpropShape<B0::Output>,
+{
+    type TrainingCache = Net<B0::TrainingCache, B1::TrainingCache>;
+
+    fn shape_with_cache(self, input: I) -> (ModelShapes<I, Self>, Self::TrainingCache) {
+        let (shape0, cache0) = self.0.shape_with_cache(input);
+        let (shape1, cache1) = self.1.shape_with_cache(shape0.output);
+        (
+            ModelShapes {
+                params: Net(shape0.params, shape1.params),
+                output: shape1.output,
+                stack_size: shape0.output.batched(1).size()
+                    + usize::max(shape0.stack_size, shape1.stack_size),
+            },
+            Net(cache0, cache1),
+        )
+    }
+}
+
+impl<F, I, B0, B1> Inference<I, F> for Net<B0, B1>
+where
+    I: BatchShape,
+    B0: Inference<I, F>,
+    B1: Inference<B0::Output, F>,
+{
+    fn infer(
+        self,
+        i: I,
+        b: usize,
+        p: View<Self::Params, &F>,
+        in_: View<Batched<I>, &F>,
+        out: View<Batched<Self::Output>, &mut F>,
+        s: &mut [F],
+    ) {
+        let shape0 = self.0.shape(i);
+        let m = shape0.output;
+        let mid_shape = m.batched(b);
+        let (mid_slice, s) = s.split_at_mut(mid_shape.size());
+
+        let mid = mid_shape.from_slice(&mut *mid_slice);
+        self.0.infer(i, b, p.0, in_, mid, s);
+
+        let mid = mid_shape.from_slice(&*mid_slice);
+        self.1.infer(m, b, p.1, mid, out, s);
+    }
+}
+
+impl<F, I, B0, B1> Backprop<I, F> for Net<B0, B1>
+where
+    I: BatchShape,
+    B0: Backprop<I, F>,
+    B1: Backprop<B0::Output, F>,
 {
     fn forward(
         self,
-        i: Self::Input,
+        i: I,
         b: usize,
         p: View<Self::Params, &F>,
-        in_: View<Batched<Self::Input>, &F>,
+        in_: View<Batched<I>, &F>,
         out: View<Batched<Self::Output>, &mut F>,
-        c: View<Batched<Self::Cache>, &mut F>,
+        c: View<Batched<Self::TrainingCache>, &mut F>,
         s: &mut [F],
     ) {
         let shape0 = self.0.shape(i);
@@ -104,13 +207,13 @@ where
 
     fn backward(
         self,
-        i: Self::Input,
+        i: I,
         b: usize,
         p: View<Self::Params, &F>,
         dout: View<Batched<Self::Output>, &F>,
-        din_: View<Batched<Self::Input>, &mut F>,
+        din_: View<Batched<I>, &mut F>,
         dp: View<Self::Params, &mut F>,
-        c: View<Batched<Self::Cache>, &F>,
+        c: View<Batched<Self::TrainingCache>, &F>,
         s: &mut [F],
     ) {
         let shape0 = self.0.shape(i);

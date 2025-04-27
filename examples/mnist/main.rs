@@ -49,12 +49,13 @@ fn main() {
     const BATCH_SIZE: usize = 120;
 
     for _ in 0..20 {
-        let cost = trainer.train_epoch(training_data.0.view(), training_data.1.view(), BATCH_SIZE);
+        let cost =
+            trainer.train_epoch(&training_data.0.view(), &training_data.1.view(), BATCH_SIZE);
 
         costs.push(dbg!(cost));
     }
 
-    let cost = trainer.test_epoch(testing_data.0.view(), testing_data.1.view());
+    let cost = trainer.test_epoch(&testing_data.0.view(), &testing_data.1.view());
     dbg!(cost);
 
     // let graph = trainer.graph;
@@ -68,9 +69,7 @@ fn main() {
     let input = training_data.0.index_axis(Axis(0), 0);
     let expected = training_data.1.index_axis(Axis(0), 0);
 
-    let output = trainer
-        .as_model()
-        .apply_batch(1, input.into_shape_with_order((1, 28 * 28)).unwrap());
+    let output = trainer.as_model().apply_single(input);
     println!("output: {:?}", output);
     println!("expected: {:?}", expected);
 }
@@ -79,8 +78,8 @@ fn process_data(data: &parse::DataSet) -> (Array2<f32>, Array2<f32>) {
     let data_len = data.images.len();
     assert_eq!(data_len, data.labels.len());
 
-    let mut input = Array2::uninit((data_len, 28 * 28));
-    let mut expected = Array2::zeros((data_len, 10));
+    let mut input = Array2::<f32>::zeros((data_len, 28 * 28));
+    let mut expected = Array2::<f32>::zeros((data_len, 10));
 
     for (i, image) in data.images.iter().enumerate() {
         for (j, &b) in image.iter().enumerate() {
@@ -91,5 +90,5 @@ fn process_data(data: &parse::DataSet) -> (Array2<f32>, Array2<f32>) {
         expected[(i, label as usize)] = 1.0;
     }
 
-    unsafe { (input.assume_init(), expected) }
+    (input, expected)
 }
