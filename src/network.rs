@@ -1,204 +1,128 @@
-use ndarray::{ArrayViewMut, Dimension, ViewRepr};
+use ndarray::RawData;
 use rand::Rng;
 
-use crate::{Arr, ArrViewMut, GraphBuilder, Initialise, Layer, MutRepr, Scalar, TrainableLayer};
+use crate::{
+    Backprop, BackpropShape, BackpropShapes, Batch, Batched, Initialise, Scalar, Shape, Slice, View,
+};
 
-impl<G1, G2> GraphBuilder for (G1, G2)
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Net<B0, B1>(pub B0, pub B1);
+
+impl<S0, S1> Shape for Net<S0, S1>
 where
-    G1: GraphBuilder,
-    G2: GraphBuilder<InputShape = G1::OutputShape>,
+    S0: Shape,
+    S1: Shape,
 {
-    type InputShape = G1::InputShape;
-    type OutputShape = G2::OutputShape;
+    type Base<S: RawData> = Net<S0::Base<S>, S1::Base<S>>;
 
-    type Layer = (G1::Layer, G2::Layer);
-
-    fn with_input_shape(self, input_shape: Self::InputShape) -> Self::Layer {
-        let l1 = self.0.with_input_shape(input_shape);
-        let l2 = self.1.with_input_shape(l1.output_shape());
-        (l1, l2)
-    }
-}
-
-impl<L1, L2> Layer for (L1, L2)
-where
-    L1: Layer,
-    L2: Layer<InputShape = L1::OutputShape>,
-{
-    type InputShape = L1::InputShape;
-    type OutputShape = L2::OutputShape;
-    type State<S: ndarray::RawData> = (L1::State<S>, L2::State<S>);
-
-    fn size(&self) -> usize {
+    #[inline]
+    fn size(self) -> usize {
         self.0.size() + self.1.size()
     }
 
-    fn output_shape(&self) -> Self::OutputShape {
-        self.1.output_shape()
-    }
-
-    fn batched_output_shape(&self, batch_size: usize) -> <Self::OutputShape as Dimension>::Larger {
-        self.1.batched_output_shape(batch_size)
-    }
-
-    fn stack_space(&self, batch_size: usize) -> usize {
-        // Each path needs some spare stack space
-        let sp0 = self.0.stack_space(batch_size);
-        let sp1 = self.1.stack_space(batch_size);
-        let inner_size = self.0.batched_output_shape(batch_size).size(); // space used by inner output
-        inner_size + sp0.max(sp1)
-    }
-
-    fn view_state<S: crate::Slice>(&self, data: S) -> Self::State<S::Repr> {
-        let i = self.0.size();
-        let data = data.split(i);
-        (self.0.view_state(data.0), self.1.view_state(data.1))
-    }
-
-    fn apply<F: Scalar>(
-        &self,
-        state: Self::State<ndarray::ViewRepr<&F>>,
-        input: Arr<impl ndarray::Data<Elem = F>, Self::InputShape>,
-        output: ArrViewMut<F, Self::OutputShape>,
-        stack: &mut [F],
-    ) {
-        let batch_size = input.shape()[0];
-        let inner_size = self.0.batched_output_shape(batch_size).size(); // space used by inner output
-
-        let (inner, mut stack) = stack.split_at_mut(inner_size);
-        let inner_stack_size = self.0.stack_space(batch_size);
-
-        let mut inner =
-            ArrayViewMut::from_shape(self.0.batched_output_shape(batch_size), inner).unwrap();
-
-        self.0.apply(
-            state.0,
-            input,
-            inner.view_mut(),
-            &mut stack[..inner_stack_size],
-        );
-
-        let outer_stack_size = self.1.stack_space(batch_size);
-        self.1
-            .apply(state.1, inner, output, &mut stack[..outer_stack_size])
+    #[inline]
+    fn from_slice<S: Slice>(self, slice: S) -> Self::Base<S::Repr> {
+        let mid = self.0.size();
+        let (s0, s1) = slice.split(mid);
+        Net(self.0.from_slice(s0), self.1.from_slice(s1))
     }
 }
 
-impl<F: Scalar, L1, L2> Initialise<F> for (L1, L2)
+impl<F: Scalar, L0, L1> Initialise<F> for Net<L0, L1>
 where
-    L1: Layer + Initialise<F>,
-    L2: Layer<InputShape = L1::OutputShape> + Initialise<F>,
+    L0: Initialise<F>,
+    L1: Initialise<F, Input = L0::Output>,
 {
-    fn init(&self, rng: &mut impl Rng, state: Self::State<ndarray::ViewRepr<&mut F>>) {
+    fn init(&self, rng: &mut impl Rng, state: View<Self::Params, &mut F>) {
         self.0.init(rng, state.0);
         self.1.init(rng, state.1);
     }
 }
 
-impl<L1, L2> TrainableLayer for (L1, L2)
+impl<S0, S1> Batch for Net<S0, S1>
 where
-    L1: TrainableLayer,
-    L2: TrainableLayer + Layer<InputShape = L1::OutputShape>,
+    S0: Batch,
+    S1: Batch,
 {
-    type TrainState<S: ndarray::RawData> = (L1::TrainState<S>, L2::TrainState<S>);
+    type Batched = Net<S0::Batched, S1::Batched>;
 
-    fn train_state_size(&self, batch_size: usize) -> usize {
-        self.0.train_state_size(batch_size) + self.1.train_state_size(batch_size)
+    #[inline]
+    fn batched(self, batch: usize) -> Self::Batched {
+        Net(self.0.batched(batch), self.1.batched(batch))
     }
+}
 
-    fn view_train_state<S: crate::Slice>(
-        &self,
-        batch_size: usize,
-        data: S,
-    ) -> Self::TrainState<S::Repr> {
-        let n0 = self.0.train_state_size(batch_size);
-        let (data0, data1) = data.split(n0);
-        (
-            self.0.view_train_state(batch_size, data0),
-            self.1.view_train_state(batch_size, data1),
-        )
+impl<B0, B1> BackpropShape for Net<B0, B1>
+where
+    B0: BackpropShape,
+    B1: BackpropShape<Input = B0::Output>,
+{
+    type Params = Net<B0::Params, B1::Params>;
+    type Input = B0::Input;
+    type Output = B1::Output;
+    type Cache = Net<B0::Cache, B1::Cache>;
+
+    fn shape(self, input: Self::Input) -> BackpropShapes<Self> {
+        let shape0 = self.0.shape(input);
+        let shape1 = self.1.shape(shape0.output);
+        BackpropShapes {
+            params: Net(shape0.params, shape1.params),
+            output: shape1.output,
+            cache: Net(shape0.cache, shape1.cache),
+            stack_size: shape0.output.batched(1).size()
+                + usize::max(shape0.stack_size, shape1.stack_size),
+        }
     }
+}
 
-    fn train_stack_space(&self, batch_size: usize) -> usize {
-        let sp0 = self.0.train_stack_space(batch_size);
-        let sp1 = self.1.train_stack_space(batch_size);
-        let inner_size = self.0.batched_output_shape(batch_size).size(); // space used by inner output
-        inner_size + sp0.max(sp1)
-    }
-
-    fn forward<F: Scalar>(
-        &self,
-        state: Self::State<ndarray::ViewRepr<&F>>,
-        input: Arr<impl ndarray::Data<Elem = F>, Self::InputShape>,
-        output: ArrViewMut<F, Self::OutputShape>,
-        stack: &mut [F],
-        train_state: &mut Self::TrainState<MutRepr<F>>,
+impl<F, B0, B1> Backprop<F> for Net<B0, B1>
+where
+    B0: Backprop<F>,
+    B1: Backprop<F, Input = B0::Output>,
+{
+    fn forward(
+        self,
+        i: Self::Input,
+        b: usize,
+        p: View<Self::Params, &F>,
+        in_: View<Batched<Self::Input>, &F>,
+        out: View<Batched<Self::Output>, &mut F>,
+        c: View<Batched<Self::Cache>, &mut F>,
+        s: &mut [F],
     ) {
-        let batch_size = input.shape()[0];
-        let inner_size = self.0.batched_output_shape(batch_size).size(); // space used by inner output
-        debug_assert_eq!(stack.len(), self.stack_space(batch_size));
+        let shape0 = self.0.shape(i);
+        let m = shape0.output;
+        let mid_shape = m.batched(b);
+        let (mid_slice, s) = s.split_at_mut(mid_shape.size());
 
-        let (inner, mut stack) = stack.split_at_mut(inner_size);
-        let inner_stack_size = self.0.stack_space(batch_size);
+        let mid = mid_shape.from_slice(&mut *mid_slice);
+        self.0.forward(i, b, p.0, in_, mid, c.0, s);
 
-        let mut inner =
-            ArrayViewMut::from_shape(self.0.batched_output_shape(batch_size), inner).unwrap();
-
-        self.0.forward(
-            state.0,
-            input,
-            inner.view_mut(),
-            &mut stack[..inner_stack_size],
-            &mut train_state.0,
-        );
-
-        let outer_stack_size = self.1.stack_space(batch_size);
-        self.1.forward(
-            state.1,
-            inner,
-            output,
-            &mut stack[..outer_stack_size],
-            &mut train_state.1,
-        );
+        let mid = mid_shape.from_slice(&*mid_slice);
+        self.1.forward(m, b, p.1, mid, out, c.1, s);
     }
 
-    fn backward<F: Scalar>(
-        &self,
-        state: Self::State<ndarray::ViewRepr<&F>>,
-        d_state: Self::State<crate::MutRepr<F>>,
-        train_state: Self::TrainState<ViewRepr<&F>>,
-        d_output: Arr<impl ndarray::Data<Elem = F>, Self::OutputShape>,
-        d_input: ArrViewMut<F, Self::InputShape>,
-        stack: &mut [F],
+    fn backward(
+        self,
+        i: Self::Input,
+        b: usize,
+        p: View<Self::Params, &F>,
+        dout: View<Batched<Self::Output>, &F>,
+        din_: View<Batched<Self::Input>, &mut F>,
+        dp: View<Self::Params, &mut F>,
+        c: View<Batched<Self::Cache>, &F>,
+        s: &mut [F],
     ) {
-        let batch_size = d_output.shape()[0];
-        let inner_size = self.0.batched_output_shape(batch_size).size(); // space used by inner output
-        debug_assert_eq!(stack.len(), self.train_stack_space(batch_size));
+        let shape0 = self.0.shape(i);
+        let m = shape0.output;
+        let mid_shape = m.batched(b);
+        let (mid_slice, s) = s.split_at_mut(mid_shape.size());
 
-        let (inner, mut stack) = stack.split_at_mut(inner_size);
-        let inner_stack_size = self.1.train_stack_space(batch_size);
+        let dmid = mid_shape.from_slice(&mut *mid_slice);
+        self.1.backward(m, b, p.1, dout, dmid, dp.1, c.1, s);
 
-        let mut inner =
-            ArrayViewMut::from_shape(self.0.batched_output_shape(batch_size), inner).unwrap();
-
-        self.1.backward(
-            state.1,
-            d_state.1,
-            train_state.1,
-            d_output,
-            inner.view_mut(),
-            &mut stack[..inner_stack_size],
-        );
-
-        let outer_stack_size = self.0.train_stack_space(batch_size);
-        self.0.backward(
-            state.0,
-            d_state.0,
-            train_state.0,
-            inner,
-            d_input,
-            &mut stack[..outer_stack_size],
-        );
+        let dmid = mid_shape.from_slice(&*mid_slice);
+        self.0.backward(i, b, p.0, dmid, din_, dp.0, c.0, s);
     }
 }
 
@@ -234,14 +158,14 @@ macro_rules! net {
     };
     ($($g0:expr, $g1:expr),* $(,)?) => {
         $crate::net!($(
-            ($g0, $g1)
+            $crate::network::Net($g0, $g1)
         ),*)
     };
     ($g:expr, $($g0:expr, $g1:expr),* $(,)?) => {
         $crate::net!(
             $g,
             $(
-                ($g0, $g1)
+                $crate::network::Net($g0, $g1)
             ),*
         )
     };
@@ -249,6 +173,8 @@ macro_rules! net {
 
 #[cfg(test)]
 mod tests {
+    use crate::network::Net;
+
     #[test]
     fn test_tuple_macro() {
         // single value
@@ -257,18 +183,18 @@ mod tests {
 
         // two values
         let t = net!(0, 1);
-        assert_eq!(t, (0, 1));
+        assert_eq!(t, Net(0, 1));
 
         // 8 values (balanced nested binary tree)
         let t = net!(0, 1, 2, 3, 4, 5, 6, 7);
-        assert_eq!(t, (((0, 1), (2, 3)), ((4, 5), (6, 7))));
+        assert_eq!(t, Net(Net(Net(0, 1), Net(2, 3)), Net(Net(4, 5), Net(6, 7))));
 
         // 7 values (off balance nested binary tree)
         let t = net!(0, 1, 2, 3, 4, 5, 6);
-        assert_eq!(t, ((0, (1, 2)), ((3, 4), (5, 6))));
+        assert_eq!(t, Net(Net(0, Net(1, 2)), Net(Net(3, 4), Net(5, 6))));
 
         // 6 values (off balance nested binary tree)
         let t = net!(0, 1, 2, 3, 4, 5);
-        assert_eq!(t, ((0, 1), ((2, 3), (4, 5))));
+        assert_eq!(t, Net(Net(0, 1), Net(Net(2, 3), Net(4, 5))));
     }
 }

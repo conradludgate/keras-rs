@@ -1,66 +1,60 @@
-use ndarray::{ArrayBase, Data, Dimension, IntoDimension, Ix1, Ix2, ViewRepr};
+use ndarray::{Ix0, Ix1};
 
-use crate::{Arr, ArrViewMut, MutRepr, Scalar, Slice, TrainableLayer};
-
-use super::{Activation, ActivationLayer};
+use crate::{Backprop, BackpropShape, BackpropShapes, Initialise, Scalar};
 
 #[derive(Debug, Copy, Clone)]
 pub struct Sigmoid;
-impl Activation for Sigmoid {
-    type Shape = Ix1;
 
-    fn apply<F: Scalar>(
-        input: Arr<impl Data<Elem = F>, Self::Shape>,
-        mut output: ArrViewMut<F, Self::Shape>,
+impl BackpropShape for Sigmoid {
+    type Params = Ix0;
+    type Input = Ix1;
+    type Output = Ix1;
+    type Cache = Ix1;
+
+    fn shape(self, input: Self::Input) -> BackpropShapes<Self> {
+        BackpropShapes {
+            params: Ix0(),
+            output: input,
+            cache: input,
+            stack_size: 0,
+        }
+    }
+}
+
+impl<F: Scalar> Initialise<F> for Sigmoid {
+    fn init(&self, _: &mut impl rand::Rng, _: crate::View<Self::Params, &mut F>) {}
+}
+
+impl<F: Scalar> Backprop<F> for Sigmoid {
+    fn forward(
+        self,
+        _: Self::Input,
+        _: usize,
+        _: crate::View<Self::Params, &F>,
+        input: crate::View<crate::Batched<Self::Input>, &F>,
+        mut output: crate::View<crate::Batched<Self::Output>, &mut F>,
+        cache: crate::View<crate::Batched<Self::Cache>, &mut F>,
+        _: &mut [F],
     ) {
         let one = F::one();
         output.zip_mut_with(&input, |o, &i| {
             *o = one / (one + (-i).exp());
         });
+        output.assign_to(cache);
     }
 
-    fn batch(shape: Self::Shape, batch_size: usize) -> <Self::Shape as Dimension>::Larger {
-        [batch_size, shape.into_pattern()].into_dimension()
-    }
-}
-
-impl TrainableLayer for ActivationLayer<Sigmoid> {
-    type TrainState<S: ndarray::RawData> = ArrayBase<S, Ix2>;
-    fn train_state_size(&self, batch_size: usize) -> usize {
-        self.shape.size() * batch_size
-    }
-
-    fn view_train_state<S: Slice>(&self, batch_size: usize, data: S) -> Self::TrainState<S::Repr> {
-        data.into_array([batch_size, self.shape.into_pattern()])
-    }
-
-    fn train_stack_space(&self, _batch_size: usize) -> usize {
-        0
-    }
-
-    fn forward<F: Scalar>(
-        &self,
-        _state: Self::State<ndarray::ViewRepr<&F>>,
-        input: Arr<impl Data<Elem = F>, Self::InputShape>,
-        mut output: ArrViewMut<F, Self::OutputShape>,
-        _stack: &mut [F],
-        train_state: &mut Self::TrainState<MutRepr<F>>,
+    fn backward(
+        self,
+        _: Self::Input,
+        _: usize,
+        _: crate::View<Self::Params, &F>,
+        de_doutput: crate::View<crate::Batched<Self::Output>, &F>,
+        mut de_dinput: crate::View<crate::Batched<Self::Input>, &mut F>,
+        _: crate::View<Self::Params, &mut F>,
+        cache: crate::View<crate::Batched<Self::Cache>, &F>,
+        _: &mut [F],
     ) {
-        Sigmoid::apply(input, output.view_mut());
-        output.assign_to(train_state);
-    }
-
-    fn backward<F: Scalar>(
-        &self,
-        _state: Self::State<ndarray::ViewRepr<&F>>,
-        _d_state: Self::State<MutRepr<F>>,
-        train_state: Self::TrainState<ViewRepr<&F>>,
-        d_output: Arr<impl Data<Elem = F>, Self::OutputShape>,
-        mut d_input: ArrViewMut<F, Self::InputShape>,
-        stack: &mut [F],
-    ) {
-        debug_assert_eq!(stack.len(), 0);
-        d_output.assign_to(d_input.view_mut());
-        d_input.zip_mut_with(&train_state, |di, &f| *di = *di * f * (-f + F::one()));
+        de_doutput.assign_to(de_dinput.view_mut());
+        de_dinput.zip_mut_with(&cache, |di, &f| *di = *di * f * (-f + F::one()));
     }
 }

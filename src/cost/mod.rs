@@ -1,17 +1,14 @@
-use crate::{Arr, OwnedArr, Scalar};
-use ndarray::{Data, Dimension};
+use crate::{Batch, Batched, Scalar, View};
 
 pub mod mse;
 
-pub trait Cost<D: Dimension> {
-    fn cost<F: Scalar>(
-        &self,
-        output: Arr<impl Data<Elem = F>, D>,
-        expected: Arr<impl Data<Elem = F>, D>,
-    ) -> F;
+pub trait Cost<D: Batch> {
+    fn cost<F: Scalar>(&self, output: View<Batched<D>, &F>, expected: View<Batched<D>, &F>) -> F;
+
     fn diff<F: Scalar>(
         &self,
-        output: Arr<impl Data<Elem = F>, D>,
-        expected: Arr<impl Data<Elem = F>, D>,
-    ) -> OwnedArr<F, D>;
+        output: View<Batched<D>, &F>,
+        expected: View<Batched<D>, &F>,
+        diff: View<Batched<D>, &mut F>,
+    ) -> F;
 }

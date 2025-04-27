@@ -3,9 +3,9 @@
 use std::ops::Neg;
 
 use model::Model;
-use named::Named;
 use ndarray::{
-    ArrayBase, Data, Dimension, IntoDimension, LinalgScalar, RawData, ScalarOperand, ViewRepr,
+    ArrayBase, Dimension, IntoDimension, Ix0, Ix1, Ix2, LinalgScalar, RawData, ScalarOperand,
+    ViewRepr,
 };
 use rand::{thread_rng, Rng};
 use rand_distr::num_traits::{Float, FromPrimitive};
@@ -13,54 +13,13 @@ use rand_distr::num_traits::{Float, FromPrimitive};
 pub mod activation;
 // pub mod attention;
 pub mod cost;
-pub mod dense;
-pub mod embedding;
+// pub mod dense;
+// pub mod embedding;
 pub mod linear;
 pub mod model;
-pub mod named;
+// pub mod named;
 pub mod network;
 pub mod optimise;
-
-/// Type representing a simple ArrayBase, but dimension larger to account for batches
-pub type Arr<S, D> = ndarray::ArrayBase<S, <D as Dimension>::Larger>;
-pub type MutRepr<'f, F> = ViewRepr<&'f mut F>;
-pub type OwnedArr<F, D> = Arr<ndarray::OwnedRepr<F>, D>;
-pub type ArrView<'a, F, D> = Arr<ViewRepr<&'a F>, D>;
-pub type ArrViewMut<'a, F, D> = Arr<MutRepr<'a, F>, D>;
-
-type LayerTrainState<'a, F, L> = <L as TrainableLayer>::TrainState<ViewRepr<&'a F>>;
-
-/// An abstract representation of a Computation Graph.
-pub trait GraphBuilder: Sized {
-    type InputShape: Dimension;
-    type OutputShape: Dimension;
-
-    /// The state that this builder produces
-    type Layer: Layer<InputShape = Self::InputShape, OutputShape = Self::OutputShape>;
-
-    fn with_input_shape(self, input_shape: Self::InputShape) -> Self::Layer;
-
-    fn into_model<F: Scalar>(
-        self,
-        input_shape: impl IntoDimension<Dim = Self::InputShape>,
-    ) -> Model<F, Self>
-    where
-        Self::Layer: Initialise<F>,
-    {
-        let layer = self.with_input_shape(input_shape.into_dimension());
-        let len = layer.size();
-
-        let mut data = vec![F::zero(); len];
-
-        layer.init(&mut thread_rng(), layer.view_state(&mut data[..]));
-
-        Model { layer, data }
-    }
-
-    fn named<S: ToString>(self, name: S) -> Named<Self, S> {
-        Named { inner: self, name }
-    }
-}
 
 pub trait Scalar:
     LinalgScalar + ScalarOperand + Float + FromPrimitive + Neg<Output = Self> + std::fmt::Debug
@@ -99,59 +58,144 @@ impl<'a, T> Slice for &'a [T] {
     }
 }
 
-pub trait Layer {
-    type InputShape: Dimension;
-    type OutputShape: Dimension;
-    type State<S: RawData>;
+pub trait Initialise<F: Scalar>: BackpropShape {
+    fn init(&self, rng: &mut impl Rng, state: View<Self::Params, &mut F>);
 
-    fn size(&self) -> usize;
-    fn output_shape(&self) -> Self::OutputShape;
-    fn batched_output_shape(&self, batch_size: usize) -> <Self::OutputShape as Dimension>::Larger;
-    fn stack_space(&self, batch_size: usize) -> usize;
+    fn into_model(self, input_shape: Self::Input) -> Model<F, Self> {
+        let shape = self.shape(input_shape);
+        let len = shape.params.size();
+        let mut data = vec![F::zero(); len];
 
-    fn view_state<S: Slice>(&self, data: S) -> Self::State<S::Repr>;
+        self.init(&mut thread_rng(), shape.params.from_slice(&mut data[..]));
 
-    /// Apply the layer to the input and get the output
+        Model {
+            input: input_shape,
+            layer: self,
+            params: data,
+            stack: Vec::new(),
+        }
+    }
+}
+
+pub type View<S, R> = <S as Shape>::Base<ViewRepr<R>>;
+pub type Batched<S> = <S as Batch>::Batched;
+
+pub trait Shape: Copy {
+    type Base<S: RawData>;
+
+    fn size(self) -> usize;
+    fn from_slice<S: Slice>(self, slice: S) -> Self::Base<S::Repr>;
+}
+
+pub trait Batch: Copy {
+    type Batched: Shape;
+
+    fn batched(self, batch: usize) -> Self::Batched;
+
+    #[inline]
+    fn size(self, batch: usize) -> usize {
+        self.batched(batch).size()
+    }
+
+    #[inline]
+    fn from_slice<S: Slice>(
+        self,
+        batch: usize,
+        slice: S,
+    ) -> <Batched<Self> as Shape>::Base<S::Repr> {
+        self.batched(batch).from_slice(slice)
+    }
+}
+
+impl<D: Dimension + Copy> Shape for D {
+    type Base<S: RawData> = ArrayBase<S, D>;
+
+    #[inline]
+    fn size(self) -> usize {
+        Dimension::size(&self)
+    }
+
+    fn from_slice<S: Slice>(self, slice: S) -> Self::Base<S::Repr> {
+        slice.into_array(self)
+    }
+}
+
+impl Batch for Ix0 {
+    type Batched = Ix0;
+
+    #[inline]
+    fn batched(self, _batch: usize) -> Self::Batched {
+        self
+    }
+}
+
+impl Batch for Ix1 {
+    type Batched = Ix2;
+
+    #[inline]
+    fn batched(self, batch: usize) -> Self::Batched {
+        let x0 = self.into_pattern();
+        Ix2(batch, x0)
+    }
+}
+
+pub struct BackpropShapes<B: BackpropShape> {
+    pub params: B::Params,
+    pub output: B::Output,
+    pub cache: B::Cache,
+    pub stack_size: usize,
+}
+
+pub trait BackpropShape: Copy {
+    type Params: Shape;
+    type Input: Batch;
+    type Output: Batch;
+    type Cache: Batch;
+
+    fn shape(self, input: Self::Input) -> BackpropShapes<Self>;
+}
+
+pub trait Backprop<F>: BackpropShape {
+    /// # Inputs
+    /// self: fn f(params, input) -> output
+    /// params: the parameters
+    /// input: the input
     ///
-    /// `state` stores any parameters used in the forward pass. See [`view_state`].
-    /// `input` is the input to the layer
-    /// `stack` is where the output is written to. The length is specified by [`stack_space`].
-    /// If `stack` length is larger than needed for the output, any spare data can be written there and will be discarded later
-    fn apply<F: Scalar>(
-        &self,
-        state: Self::State<ViewRepr<&F>>,
-        input: Arr<impl Data<Elem = F>, Self::InputShape>,
-        output: ArrViewMut<F, Self::OutputShape>,
+    /// # Outputs
+    /// output = f(params, input)
+    /// cache = encode(input)
+    fn forward(
+        self,
+        input_shape: Self::Input,
+        batch_size: usize,
+        params: View<Self::Params, &F>,
+        input: View<Batched<Self::Input>, &F>,
+        output: View<Batched<Self::Output>, &mut F>,
+        cache: View<Batched<Self::Cache>, &mut F>,
         stack: &mut [F],
     );
-}
 
-pub trait Initialise<F: Scalar>: Layer {
-    fn init(&self, rng: &mut impl Rng, state: Self::State<MutRepr<F>>);
-}
-
-pub trait TrainableLayer: Layer {
-    type TrainState<S: RawData>;
-    fn train_state_size(&self, batch_size: usize) -> usize;
-    fn view_train_state<S: Slice>(&self, batch_size: usize, data: S) -> Self::TrainState<S::Repr>;
-    fn train_stack_space(&self, batch_size: usize) -> usize;
-
-    fn forward<F: Scalar>(
-        &self,
-        state: Self::State<ViewRepr<&F>>,
-        input: Arr<impl Data<Elem = F>, Self::InputShape>,
-        output: ArrViewMut<F, Self::OutputShape>,
-        stack: &mut [F],
-        train_state: &mut Self::TrainState<MutRepr<F>>,
-    );
-
-    fn backward<F: Scalar>(
-        &self,
-        state: Self::State<ViewRepr<&F>>,
-        d_state: Self::State<MutRepr<F>>,
-        train_state: Self::TrainState<ViewRepr<&F>>,
-        d_output: Arr<impl Data<Elem = F>, Self::OutputShape>,
-        d_input: ArrViewMut<F, Self::InputShape>,
+    /// # Inputs
+    /// self:
+    ///   fn df_dparams(params, input) = derivative of f with respect to params
+    ///   fn df_dinput(params, input) = derivative of f with respect to input
+    ///
+    /// params: the parameters
+    /// de_doutput: derivative of the error with respect to the output
+    /// input = decode(cache)
+    ///
+    /// # Outputs
+    /// de_dinput = de_doutput * df_dinput(params, input)
+    /// de_dparams = de_doutput * df_dparams(params, input)
+    fn backward(
+        self,
+        input_shape: Self::Input,
+        batch_size: usize,
+        params: View<Self::Params, &F>,
+        de_doutput: View<Batched<Self::Output>, &F>,
+        de_dinput: View<Batched<Self::Input>, &mut F>,
+        de_dparams: View<Self::Params, &mut F>,
+        cache: View<Batched<Self::Cache>, &F>,
         stack: &mut [F],
     );
 }

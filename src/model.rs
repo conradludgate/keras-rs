@@ -1,34 +1,59 @@
-use ndarray::{ArrayView, ArrayViewMut, Axis, Data, Dimension, ViewRepr};
+use ndarray::{ArrayView, ArrayView2, ArrayViewMut, Axis, Dimension, Ix1};
 use rand::{prelude::SliceRandom, thread_rng};
 use rand_distr::num_traits::Float;
 
 use crate::{
-    cost::Cost, optimise::Optimiser, Arr, ArrView, ArrViewMut, GraphBuilder, Layer,
-    LayerTrainState, OwnedArr, Scalar, TrainableLayer,
+    cost::Cost, optimise::Optimiser, Backprop, BackpropShape, Batch, Batched, Scalar, Shape, View,
 };
 
-pub struct Model<F: Scalar, G: GraphBuilder> {
-    pub(crate) layer: G::Layer,
-    pub(crate) data: Vec<F>,
+pub struct Model<F: Scalar, G: BackpropShape> {
+    pub(crate) input: G::Input,
+    pub(crate) layer: G,
+    pub(crate) params: Vec<F>,
+    pub(crate) stack: Vec<F>,
 }
 
-impl<F: Scalar, G: GraphBuilder> Model<F, G> {
-    fn state(&self) -> <G::Layer as Layer>::State<ViewRepr<&'_ F>> {
-        self.layer.view_state(self.data.as_slice())
-    }
+impl<F: Scalar, G: Backprop<F>> Model<F, G> {
+    pub fn apply_batch<'a>(
+        &'a mut self,
+        batch_size: usize,
+        input: View<Batched<G::Input>, &F>,
+    ) -> View<Batched<G::Output>, &'a mut F> {
+        let stack_buf = &mut self.stack;
 
-    pub fn apply_batch(
-        &self,
-        input: Arr<impl Data<Elem = F>, G::InputShape>,
-    ) -> OwnedArr<F, G::OutputShape> {
-        let batch_size = input.shape()[0];
-        let mut output =
-            OwnedArr::<F, G::OutputShape>::zeros(self.layer.batched_output_shape(batch_size));
-        let stack_size = self.layer.stack_space(batch_size);
-        let mut stack = vec![F::zero(); stack_size];
-        self.layer
-            .apply(self.state(), input, output.view_mut(), &mut *stack);
-        output
+        let shape = self.layer.shape(self.input);
+        let cache_shape = shape.cache.batched(batch_size);
+        let output_shape = shape.output.batched(batch_size);
+
+        // stack:
+        // 0. output
+        // 1. cache (todo: remove)
+        // 2. rest
+
+        let stack0 = output_shape.size();
+        let stack1 = cache_shape.size();
+        let stack2 = shape.stack_size * batch_size;
+        let stack_size = stack0 + stack1 + stack2;
+        stack_buf.resize(stack_size, F::zero());
+
+        let (output_buf, stack) = stack_buf.split_at_mut(stack0);
+        let (cache_buf, stack) = stack.split_at_mut(stack1);
+
+        let params = shape.params.from_slice(&*self.params);
+        let output = output_shape.from_slice(&mut *output_buf);
+        let cache = cache_shape.from_slice(&mut *cache_buf);
+
+        self.layer.forward(
+            self.input,
+            batch_size,
+            params,
+            input,
+            output,
+            cache,
+            &mut *stack,
+        );
+
+        output_shape.from_slice(&mut *output_buf)
     }
 
     // pub fn apply_single(
@@ -51,52 +76,40 @@ impl<F: Scalar, G: GraphBuilder> Model<F, G> {
     // }
 }
 
-pub struct Trainer<F: Scalar, G: GraphBuilder, O: Optimiser<F>, C: Cost<G::OutputShape>>
-where
-    G::Layer: TrainableLayer,
-{
+pub struct Trainer<F: Scalar, G: Backprop<F>, O: Optimiser<F>, C: Cost<G::Output>> {
     pub model: Model<F, G>,
     pub optimiser: O,
     pub cost: C,
     pub regularisation: Option<Regularisation<F>>,
 }
 
-pub struct ModelTrainer<F: Scalar, G: GraphBuilder, O: Optimiser<F>, C: Cost<G::OutputShape>>
-where
-    G::Layer: TrainableLayer,
-{
+pub struct ModelTrainer<F: Scalar, G: Backprop<F>, O: Optimiser<F>, C: Cost<G::Output>> {
     trainer: Trainer<F, G, O, C>,
     bufs: Bufs<F>,
 }
 
 struct Bufs<F> {
     data: Vec<F>,
-    stack: Vec<F>,
     gradiants: Vec<F>,
-    train_state: Vec<F>,
-    train_stack: Vec<F>,
 }
 
 impl<F> Default for Bufs<F> {
     fn default() -> Self {
         Self {
             data: vec![],
-            stack: vec![],
             gradiants: vec![],
-            train_state: vec![],
-            train_stack: vec![],
         }
     }
 }
 
-impl<F: Scalar, G: GraphBuilder, O: Optimiser<F>, C: Cost<G::OutputShape>> ModelTrainer<F, G, O, C>
+impl<F: Scalar, G: Backprop<F>, O: Optimiser<F>, C: Cost<G::Output>> ModelTrainer<F, G, O, C>
 where
-    G::Layer: TrainableLayer,
+    G: BackpropShape<Input = Ix1, Output = Ix1>,
 {
     pub fn train_epoch(
         &mut self,
-        input: Arr<impl Data<Elem = F>, G::InputShape>,
-        expected: Arr<impl Data<Elem = F>, G::OutputShape>,
+        input: View<Batched<G::Input>, &F>,
+        expected: View<Batched<G::Output>, &F>,
         batch_size: usize,
     ) -> F {
         self.trainer
@@ -105,8 +118,8 @@ where
 
     pub fn test_epoch(
         &mut self,
-        input: Arr<impl Data<Elem = F>, G::InputShape>,
-        expected: Arr<impl Data<Elem = F>, G::OutputShape>,
+        input: View<Batched<G::Input>, &F>,
+        expected: View<Batched<G::Output>, &F>,
     ) -> F {
         self.trainer.test_epoch(input, expected, &mut self.bufs)
     }
@@ -115,27 +128,19 @@ where
         self.trainer
     }
 
-    pub fn as_model(&self) -> &Model<F, G> {
-        &self.trainer.model
+    pub fn as_model(&mut self) -> &mut Model<F, G> {
+        &mut self.trainer.model
     }
 }
 
-impl<F: Scalar, G: GraphBuilder, O: Optimiser<F>, C: Cost<G::OutputShape>> Trainer<F, G, O, C>
+impl<F: Scalar, G: Backprop<F>, O: Optimiser<F>, C: Cost<G::Output>> Trainer<F, G, O, C>
 where
-    G::Layer: TrainableLayer,
+    G: BackpropShape<Input = Ix1, Output = Ix1>,
 {
-    pub fn build(mut self) -> ModelTrainer<F, G, O, C> {
-        self.optimiser.init(self.model.layer.size());
-        ModelTrainer {
-            trainer: self,
-            bufs: Bufs::default(),
-        }
-    }
-
     fn train_epoch(
         &mut self,
-        input: Arr<impl Data<Elem = F>, G::InputShape>,
-        expected: Arr<impl Data<Elem = F>, G::OutputShape>,
+        input: ArrayView2<F>,
+        expected: ArrayView2<F>,
         batch_size: usize,
         bufs: &mut Bufs<F>,
     ) -> F {
@@ -149,15 +154,7 @@ where
         for indices in indices.chunks(batch_size) {
             let (input, expected) =
                 self.select_batch(input.view(), expected.view(), indices, &mut bufs.data);
-            cost = cost
-                + self.train_batch(
-                    input,
-                    expected,
-                    &mut bufs.gradiants,
-                    &mut bufs.stack,
-                    &mut bufs.train_state,
-                    &mut bufs.train_stack,
-                );
+            cost = cost + self.train_batch(batch_size, input, expected, &mut bufs.gradiants);
         }
 
         cost / F::from_usize((total_inputs + batch_size - 1) / batch_size).unwrap()
@@ -165,8 +162,8 @@ where
 
     fn test_epoch(
         &mut self,
-        input: Arr<impl Data<Elem = F>, G::InputShape>,
-        expected: Arr<impl Data<Elem = F>, G::OutputShape>,
+        input: ArrayView2<F>,
+        expected: ArrayView2<F>,
         bufs: &mut Bufs<F>,
     ) -> F {
         let total_inputs = input.raw_dim()[0];
@@ -175,7 +172,7 @@ where
         for indices in 0..total_inputs {
             let (input, expected) =
                 self.select_batch(input.view(), expected.view(), &[indices], &mut bufs.data);
-            cost = cost + self.test_batch(input, expected, &mut bufs.stack);
+            cost = cost + self.test_batch(1, input, expected);
         }
 
         cost / F::from_usize(total_inputs).unwrap()
@@ -183,14 +180,11 @@ where
 
     fn select_batch<'a>(
         &mut self,
-        input: Arr<impl Data<Elem = F>, G::InputShape>,
-        expected: Arr<impl Data<Elem = F>, G::OutputShape>,
+        input: ArrayView2<F>,
+        expected: ArrayView2<F>,
         indices: &[usize],
         data_buf: &'a mut Vec<F>,
-    ) -> (
-        ArrView<'a, F, G::InputShape>,
-        ArrView<'a, F, G::OutputShape>,
-    ) {
+    ) -> (ArrayView2<'a, F>, ArrayView2<'a, F>) {
         data_buf.clear();
 
         let mut input_dim = input.raw_dim();
@@ -227,170 +221,158 @@ where
         let expected = ArrayView::from_shape(expected_dim, expected).unwrap();
         (input, expected)
     }
+}
+
+impl<F: Scalar, G: Backprop<F>, O: Optimiser<F>, C: Cost<G::Output>> Trainer<F, G, O, C> {
+    pub fn build(mut self) -> ModelTrainer<F, G, O, C> {
+        self.optimiser
+            .init(self.model.layer.shape(self.model.input).params.size());
+        ModelTrainer {
+            bufs: Bufs {
+                data: Vec::new(),
+                gradiants: self.model.params.clone(),
+            },
+            trainer: self,
+        }
+    }
 
     fn test_batch(
         &mut self,
-        input: Arr<impl Data<Elem = F>, G::InputShape>,
-        expected: Arr<impl Data<Elem = F>, G::OutputShape>,
-        stack_buf: &mut Vec<F>,
+        batch_size: usize,
+        input: View<Batched<G::Input>, &F>,
+        expected: View<Batched<G::Output>, &F>,
     ) -> F {
-        debug_assert_eq!(
-            input.shape()[0],
-            expected.shape()[0],
-            "input and expected batch sizes should be equal"
-        );
+        let stack_buf = &mut self.model.stack;
 
-        let output = self.test_batch_forward(input, stack_buf);
-        self.cost.cost(output, expected)
+        let shape = self.model.layer.shape(self.model.input);
+        let output_shape = shape.output.batched(batch_size);
+        let cache_shape = shape.cache.batched(batch_size);
+
+        // stack:
+        // 0. doutput
+        // 1. cache (todo: remove)
+        // 2. output
+        // 3. rest
+
+        let stack0 = output_shape.size();
+        let stack1 = cache_shape.size();
+        let stack2 = output_shape.size();
+        let stack3 = shape.stack_size * batch_size;
+        let stack_size = stack0 + stack1 + stack2 + stack3;
+        stack_buf.resize(stack_size, F::zero());
+
+        let (doutput_buf, stack) = stack_buf.split_at_mut(stack0);
+        let (cache_buf, stack) = stack.split_at_mut(stack1);
+        let (output_buf, stack) = stack.split_at_mut(stack2);
+
+        // forward
+        {
+            let params = shape.params.from_slice(&*self.model.params);
+            let output = output_shape.from_slice(&mut output_buf[..output_shape.size()]);
+            // todo: remove
+            let cache = cache_shape.from_slice(&mut *cache_buf);
+
+            self.model.layer.forward(
+                self.model.input,
+                batch_size,
+                params,
+                input,
+                output,
+                cache,
+                stack,
+            );
+        }
+
+        // eval
+        let cost = {
+            let doutput = output_shape.from_slice(&mut *doutput_buf);
+            let output = output_shape.from_slice(&output_buf[..output_shape.size()]);
+            self.cost.diff(output, expected, doutput)
+        };
+        cost
     }
 
     fn train_batch(
         &mut self,
-        input: Arr<impl Data<Elem = F>, G::InputShape>,
-        expected: Arr<impl Data<Elem = F>, G::OutputShape>,
-        gradiants_buf: &mut Vec<F>,
-        stack_buf: &mut Vec<F>,
-        train_state_buf: &mut Vec<F>,
-        train_stack_buf: &mut Vec<F>,
+        batch_size: usize,
+        input: View<Batched<G::Input>, &F>,
+        expected: View<Batched<G::Output>, &F>,
+        grads: &mut [F],
     ) -> F {
-        debug_assert_eq!(
-            input.shape()[0],
-            expected.shape()[0],
-            "input and expected batch sizes should be equal"
-        );
+        let stack_buf = &mut self.model.stack;
 
-        let input_shape = input.raw_dim();
-        let (output, train_state) = self.batch_forward(input, stack_buf, train_state_buf);
+        let shape = self.model.layer.shape(self.model.input);
+        let input_shape = self.model.input.batched(batch_size);
+        let output_shape = shape.output.batched(batch_size);
+        let cache_shape = shape.cache.batched(batch_size);
 
-        let d_output = self.cost.diff(output.view(), expected.view());
+        // stack:
+        // 0. doutput
+        // 1. cache
+        // 2. output / dinput
+        // 3. rest
 
-        let grads = self.batch_backward(
-            d_output,
-            input_shape,
-            train_state,
-            gradiants_buf,
-            train_stack_buf,
-        );
+        let stack0 = output_shape.size();
+        let stack1 = cache_shape.size();
+        let stack2 = usize::max(output_shape.size(), input_shape.size());
+        let stack3 = shape.stack_size * batch_size;
+        let stack_size = stack0 + stack1 + stack2 + stack3;
+        stack_buf.resize(stack_size, F::zero());
 
-        if let Some(r) = self.regularisation {
-            r.apply(grads, &self.model.data);
-        }
+        let (doutput_buf, stack) = stack_buf.split_at_mut(stack0);
+        let (cache_buf, stack) = stack.split_at_mut(stack1);
+        let (output_buf, stack) = stack.split_at_mut(stack2);
 
-        self.optimiser.optimise(&mut self.model.data, grads);
-        self.cost.cost(output, expected)
-    }
-
-    fn batch_forward<'a, 'b>(
-        &mut self,
-        input: Arr<impl Data<Elem = F>, G::InputShape>,
-        mut stack_buf: &'a mut Vec<F>,
-        mut train_state_buf: &'b mut Vec<F>,
-    ) -> (
-        ArrViewMut<'a, F, G::OutputShape>,
-        LayerTrainState<'b, F, G::Layer>,
-    ) {
-        // allocate space and get uninit slice
-        let batch_size = input.shape()[0];
-        let train_state_size = self.model.layer.train_state_size(batch_size);
-        if train_state_buf.len() < train_state_size {
-            train_state_buf.resize(train_state_size, F::zero());
-        }
-
-        let output_shape = self.model.layer.batched_output_shape(batch_size);
-        let stack_size = self.model.layer.stack_space(batch_size);
-        if stack_buf.len() < output_shape.size() + stack_size {
-            stack_buf.resize(output_shape.size() + stack_size, F::zero());
-        }
-
-        let (output, mut stack) = stack_buf.split_at_mut(output_shape.size());
-        let mut output = ArrViewMut::<F, G::OutputShape>::from_shape(output_shape, output).unwrap();
-
+        // forward
         {
-            let mut train_state = self
-                .model
-                .layer
-                .view_train_state(batch_size, &mut **train_state_buf);
+            let params = shape.params.from_slice(&*self.model.params);
+            let output = output_shape.from_slice(&mut output_buf[..output_shape.size()]);
+            let cache = cache_shape.from_slice(&mut *cache_buf);
+
             self.model.layer.forward(
-                self.model.state(),
+                self.model.input,
+                batch_size,
+                params,
                 input,
-                output.view_mut(),
-                &mut stack[..stack_size],
-                &mut train_state,
+                output,
+                cache,
+                stack,
             );
         }
 
-        let train_state = self
-            .model
-            .layer
-            .view_train_state(batch_size, &**train_state_buf);
-        (output, train_state)
-    }
+        // eval
+        let cost = {
+            let doutput = output_shape.from_slice(&mut *doutput_buf);
+            let output = output_shape.from_slice(&output_buf[..output_shape.size()]);
+            self.cost.diff(output, expected, doutput)
+        };
 
-    fn test_batch_forward<'a>(
-        &mut self,
-        input: Arr<impl Data<Elem = F>, G::InputShape>,
-        stack_buf: &'a mut Vec<F>,
-    ) -> ArrViewMut<'a, F, G::OutputShape> {
-        // allocate space and get uninit slice
-        let batch_size = input.shape()[0];
+        // backwards
+        {
+            let params = shape.params.from_slice(&*self.model.params);
+            let cache = cache_shape.from_slice(&*cache_buf);
+            let doutput = output_shape.from_slice(&*doutput_buf);
+            let dinput = input_shape.from_slice(&mut output_buf[..input_shape.size()]);
+            let dparams = shape.params.from_slice(&mut *grads);
 
-        let output_shape = self.model.layer.batched_output_shape(batch_size);
-        let stack_size = self.model.layer.stack_space(batch_size);
-        if stack_buf.len() < output_shape.size() + stack_size {
-            stack_buf.resize(output_shape.size() + stack_size, F::zero());
+            self.model.layer.backward(
+                self.model.input,
+                batch_size,
+                params,
+                doutput,
+                dinput,
+                dparams,
+                cache,
+                stack,
+            );
         }
 
-        let (output, mut stack) = stack_buf.split_at_mut(output_shape.size());
-        let mut output = ArrViewMut::<F, G::OutputShape>::from_shape(output_shape, output).unwrap();
-
-        self.model.layer.apply(
-            self.model.state(),
-            input,
-            output.view_mut(),
-            &mut stack[..stack_size],
-        );
-        output
-    }
-
-    fn batch_backward<'a>(
-        &mut self,
-        d_output: Arr<impl Data<Elem = F>, G::OutputShape>,
-        input_shape: <G::InputShape as Dimension>::Larger,
-        train_state: <G::Layer as TrainableLayer>::TrainState<ViewRepr<&F>>,
-        mut gradiants_buf: &'a mut Vec<F>,
-        train_stack_buf: &mut Vec<F>,
-    ) -> &'a mut [F] {
-        // allocate space and get uninit state
-        if gradiants_buf.len() < self.model.layer.size() {
-            gradiants_buf.resize(self.model.layer.size(), F::zero());
+        if let Some(r) = self.regularisation {
+            r.apply(grads, &self.model.params);
         }
 
-        // allocate space and get uninit slice
-        let batch_size = d_output.shape()[0];
-        let train_stack_size = self.model.layer.train_stack_space(batch_size);
-        if train_stack_buf.len() < input_shape.size() + train_stack_size {
-            train_stack_buf.resize(input_shape.size() + train_stack_size, F::zero());
-        }
-
-        let (d_input, mut train_stack) = train_stack_buf.split_at_mut(input_shape.size());
-        let d_input = ArrViewMut::<F, G::InputShape>::from_shape(input_shape, d_input).unwrap();
-
-        let d_state = self
-            .model
-            .layer
-            .view_state(&mut gradiants_buf[..self.model.layer.size()]);
-
-        // feed model backward, storing grads in uninit state
-        self.model.layer.backward(
-            self.model.state(),
-            d_state,
-            train_state,
-            d_output,
-            d_input,
-            &mut train_stack[..train_stack_size],
-        );
-
-        &mut gradiants_buf[..self.model.layer.size()]
+        self.optimiser.optimise(&mut self.model.params, grads);
+        cost
     }
 }
 

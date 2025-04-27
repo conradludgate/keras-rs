@@ -7,9 +7,9 @@ use keras_rs::{
     model::{Regularisation, Trainer},
     net,
     optimise::adam::Adam,
-    GraphBuilder,
+    Initialise,
 };
-use ndarray::{Array2, AssignElem, Axis};
+use ndarray::{Array2, AssignElem, Axis, Ix1};
 
 // enable optimised accelerate backend on macos
 #[cfg(target_os = "macos")]
@@ -25,15 +25,15 @@ fn main() {
     // With the input having size 28*28 and the output having size 10
     // Initialise it with uniform random data
     let network = net![
-        linear::Layer::output(16),
+        linear::Linear::output(16),
         Relu,
-        linear::Layer::output(16),
+        linear::Linear::output(16),
         Relu,
-        linear::Layer::output(10),
+        linear::Linear::output(10),
         Sigmoid,
     ];
 
-    let model = network.into_model(28 * 28);
+    let model = network.into_model(Ix1(28 * 28));
 
     let optimiser = Adam::new(0.001, 0.9, 0.99, 1e-8);
     let mut trainer = Trainer {
@@ -70,7 +70,7 @@ fn main() {
 
     let output = trainer
         .as_model()
-        .apply_batch(input.into_shape_with_order((1, 28 * 28)).unwrap());
+        .apply_batch(1, input.into_shape_with_order((1, 28 * 28)).unwrap());
     println!("output: {:?}", output);
     println!("expected: {:?}", expected);
 }
