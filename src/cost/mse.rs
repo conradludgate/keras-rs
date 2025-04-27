@@ -9,8 +9,16 @@ pub struct MSE;
 
 impl Cost<Ix1> for MSE {
     fn cost<F: Scalar>(&self, output: ArrayView2<F>, expected: ArrayView2<F>) -> F {
-        let diff = output.into_owned() - expected;
-        diff.t().dot(&diff).mean().unwrap()
+        let (b, o) = output.dim();
+        let size = F::from_usize(b * o).unwrap();
+        let mut sum = F::zero();
+
+        ndarray::azip!((output in output, expected in expected) {
+            let diff = *output - *expected;
+            sum = sum + diff * diff;
+        });
+
+        sum / size
     }
 
     fn diff<F: Scalar>(
@@ -26,14 +34,12 @@ impl Cost<Ix1> for MSE {
 
         let one = F::one();
         let two = one + one;
-        output.assign_to(&mut diff);
 
         let mut sum = F::zero();
-
-        diff.zip_mut_with(&expected, |output, expected| {
-            let diff = *output - *expected;
-            sum = sum + diff * diff;
-            *output = diff * two
+        ndarray::azip!((diff in diff, output in output, expected in expected) {
+            let d = *output - *expected;
+            sum = sum + d * d;
+            *diff = d * two
         });
 
         sum / size

@@ -4,8 +4,7 @@ use std::ops::Neg;
 
 use model::Model;
 use ndarray::{
-    ArrayBase, Dimension, IntoDimension, Ix0, Ix1, Ix2, LinalgScalar, RawData, ScalarOperand,
-    ViewRepr,
+    ArrayBase, Dimension, IntoDimension, Ix1, Ix2, LinalgScalar, RawData, ScalarOperand, ViewRepr,
 };
 use rand::{thread_rng, Rng};
 use rand_distr::num_traits::{Float, FromPrimitive};
@@ -59,7 +58,7 @@ impl<'a, T> Slice for &'a [T] {
 }
 
 pub trait Initialise<F: Scalar>: BackpropShape {
-    fn init(&self, rng: &mut impl Rng, state: View<Self::Params, &mut F>);
+    fn init(&self, rng: &mut impl Rng, state: Params<Self, &mut F>);
 
     fn into_model(self, input_shape: Self::Input) -> Model<F, Self> {
         let shape = self.shape(input_shape);
@@ -78,7 +77,13 @@ pub trait Initialise<F: Scalar>: BackpropShape {
 }
 
 pub type View<S, R> = <S as Shape>::Base<ViewRepr<R>>;
-pub type Batched<S> = <S as Batch>::Batched;
+pub type Batched<S> = <S as BatchShape>::Batched;
+pub type Batch<S, R> = View<Batched<S>, R>;
+
+pub type Input<S, R> = Batch<<S as BackpropShape>::Input, R>;
+pub type Output<S, R> = Batch<<S as BackpropShape>::Output, R>;
+pub type Cache<S, R> = Batch<<S as BackpropShape>::Cache, R>;
+pub type Params<S, R> = View<<S as BackpropShape>::Params, R>;
 
 pub trait Shape: Copy {
     type Base<S: RawData>;
@@ -87,7 +92,7 @@ pub trait Shape: Copy {
     fn from_slice<S: Slice>(self, slice: S) -> Self::Base<S::Repr>;
 }
 
-pub trait Batch: Copy {
+pub trait BatchShape: Copy {
     type Batched: Shape;
 
     fn batched(self, batch: usize) -> Self::Batched;
@@ -120,16 +125,7 @@ impl<D: Dimension + Copy> Shape for D {
     }
 }
 
-impl Batch for Ix0 {
-    type Batched = Ix0;
-
-    #[inline]
-    fn batched(self, _batch: usize) -> Self::Batched {
-        self
-    }
-}
-
-impl Batch for Ix1 {
+impl BatchShape for Ix1 {
     type Batched = Ix2;
 
     #[inline]
@@ -148,9 +144,9 @@ pub struct BackpropShapes<B: BackpropShape> {
 
 pub trait BackpropShape: Copy {
     type Params: Shape;
-    type Input: Batch;
-    type Output: Batch;
-    type Cache: Batch;
+    type Input: BatchShape;
+    type Output: BatchShape;
+    type Cache: BatchShape;
 
     fn shape(self, input: Self::Input) -> BackpropShapes<Self>;
 }
@@ -168,10 +164,10 @@ pub trait Backprop<F>: BackpropShape {
         self,
         input_shape: Self::Input,
         batch_size: usize,
-        params: View<Self::Params, &F>,
-        input: View<Batched<Self::Input>, &F>,
-        output: View<Batched<Self::Output>, &mut F>,
-        cache: View<Batched<Self::Cache>, &mut F>,
+        params: Params<Self, &F>,
+        input: Input<Self, &F>,
+        output: Output<Self, &mut F>,
+        cache: Cache<Self, &mut F>,
         stack: &mut [F],
     );
 
@@ -191,11 +187,11 @@ pub trait Backprop<F>: BackpropShape {
         self,
         input_shape: Self::Input,
         batch_size: usize,
-        params: View<Self::Params, &F>,
-        de_doutput: View<Batched<Self::Output>, &F>,
-        de_dinput: View<Batched<Self::Input>, &mut F>,
-        de_dparams: View<Self::Params, &mut F>,
-        cache: View<Batched<Self::Cache>, &F>,
+        params: Params<Self, &F>,
+        de_doutput: Output<Self, &F>,
+        de_dinput: Input<Self, &mut F>,
+        de_dparams: Params<Self, &mut F>,
+        cache: Cache<Self, &F>,
         stack: &mut [F],
     );
 }

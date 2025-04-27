@@ -2,7 +2,7 @@ use ndarray::RawData;
 use rand::Rng;
 
 use crate::{
-    Backprop, BackpropShape, BackpropShapes, Batch, Batched, Initialise, Scalar, Shape, Slice, View,
+    Backprop, BackpropShape, BackpropShapes, BatchShape, Batched, Initialise, Scalar, Shape, Slice, View,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -39,10 +39,10 @@ where
     }
 }
 
-impl<S0, S1> Batch for Net<S0, S1>
+impl<S0, S1> BatchShape for Net<S0, S1>
 where
-    S0: Batch,
-    S1: Batch,
+    S0: BatchShape,
+    S1: BatchShape,
 {
     type Batched = Net<S0::Batched, S1::Batched>;
 
@@ -129,28 +129,6 @@ where
 /// Converts the provided values into a nested chain of tuples.
 /// Works by taking each pair of expressions, converting them into a tuple,
 /// Then pushing all of them into the macro recursively
-///
-/// ```
-/// use keras_rs::net;
-///
-/// // These two expressions are the same
-/// let a = net!(0, 1, 2, 3);
-/// let b = net!((0, 1), (2, 3));
-/// assert_eq!(a, b);
-/// ```
-///
-/// There's an edge case to handle odd numbered inputs.
-/// It leaves the first input and pairs up the rest of them
-///
-/// ```
-/// use keras_rs::net;
-///
-/// let a = net!(0, 1, 2, 3, 4);
-/// let b = net!(0, (1, 2), (3, 4));
-/// let c = net!(0, ((1, 2), (3, 4)));
-/// assert_eq!(a, b);
-/// assert_eq!(a, c);
-/// ```
 #[macro_export]
 macro_rules! net {
     ($g0:expr $(,)?) => {

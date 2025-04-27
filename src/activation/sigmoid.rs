@@ -1,6 +1,6 @@
 use ndarray::{Ix0, Ix1};
 
-use crate::{Backprop, BackpropShape, BackpropShapes, Initialise, Scalar};
+use crate::{Backprop, BackpropShape, BackpropShapes, Batch, Initialise, Scalar, View};
 
 #[derive(Debug, Copy, Clone)]
 pub struct Sigmoid;
@@ -22,7 +22,7 @@ impl BackpropShape for Sigmoid {
 }
 
 impl<F: Scalar> Initialise<F> for Sigmoid {
-    fn init(&self, _: &mut impl rand::Rng, _: crate::View<Self::Params, &mut F>) {}
+    fn init(&self, _: &mut impl rand::Rng, _: View<Self::Params, &mut F>) {}
 }
 
 impl<F: Scalar> Backprop<F> for Sigmoid {
@@ -30,31 +30,32 @@ impl<F: Scalar> Backprop<F> for Sigmoid {
         self,
         _: Self::Input,
         _: usize,
-        _: crate::View<Self::Params, &F>,
-        input: crate::View<crate::Batched<Self::Input>, &F>,
-        mut output: crate::View<crate::Batched<Self::Output>, &mut F>,
-        cache: crate::View<crate::Batched<Self::Cache>, &mut F>,
+        _: View<Self::Params, &F>,
+        input: Batch<Self::Input, &F>,
+        mut output: Batch<Self::Output, &mut F>,
+        cache: Batch<Self::Cache, &mut F>,
         _: &mut [F],
     ) {
         let one = F::one();
-        output.zip_mut_with(&input, |o, &i| {
-            *o = one / (one + (-i).exp());
+        ndarray::azip!((input in input, output in output, cache in cache) {
+            *output = one / (one + (-*input).exp());
+            *cache = *output;
         });
-        output.assign_to(cache);
     }
 
     fn backward(
         self,
         _: Self::Input,
         _: usize,
-        _: crate::View<Self::Params, &F>,
-        de_doutput: crate::View<crate::Batched<Self::Output>, &F>,
-        mut de_dinput: crate::View<crate::Batched<Self::Input>, &mut F>,
-        _: crate::View<Self::Params, &mut F>,
-        cache: crate::View<crate::Batched<Self::Cache>, &F>,
+        _: View<Self::Params, &F>,
+        de_doutput: Batch<Self::Output, &F>,
+        mut de_dinput: Batch<Self::Input, &mut F>,
+        _: View<Self::Params, &mut F>,
+        cache: Batch<Self::Cache, &F>,
         _: &mut [F],
     ) {
-        de_doutput.assign_to(de_dinput.view_mut());
-        de_dinput.zip_mut_with(&cache, |di, &f| *di = *di * f * (-f + F::one()));
+        ndarray::azip!((di in de_dinput, &out in de_doutput, &f in cache) {
+            *di = out * f * (-f + F::one())
+        });
     }
 }

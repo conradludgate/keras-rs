@@ -1,8 +1,8 @@
-use crate::{Batch, Batched, Scalar, View};
+use crate::{BatchShape, Batched, Scalar, View};
 
 pub mod mse;
 
-pub trait Cost<D: Batch> {
+pub trait Cost<D: BatchShape> {
     fn cost<F: Scalar>(&self, output: View<Batched<D>, &F>, expected: View<Batched<D>, &F>) -> F;
 
     fn diff<F: Scalar>(

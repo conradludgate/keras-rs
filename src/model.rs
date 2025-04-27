@@ -3,7 +3,7 @@ use rand::{prelude::SliceRandom, thread_rng};
 use rand_distr::num_traits::Float;
 
 use crate::{
-    cost::Cost, optimise::Optimiser, Backprop, BackpropShape, Batch, Batched, Scalar, Shape, View,
+    cost::Cost, optimise::Optimiser, Backprop, BackpropShape, BatchShape, Batched, Input, Output, Scalar, Shape, View
 };
 
 pub struct Model<F: Scalar, G: BackpropShape> {
@@ -17,7 +17,7 @@ impl<F: Scalar, G: Backprop<F>> Model<F, G> {
     pub fn apply_batch<'a>(
         &'a mut self,
         batch_size: usize,
-        input: View<Batched<G::Input>, &F>,
+        input: Input<G, &F>,
     ) -> View<Batched<G::Output>, &'a mut F> {
         let stack_buf = &mut self.stack;
 
@@ -108,8 +108,8 @@ where
 {
     pub fn train_epoch(
         &mut self,
-        input: View<Batched<G::Input>, &F>,
-        expected: View<Batched<G::Output>, &F>,
+        input: Input<G, &F>,
+        expected: Output<G, &F>,
         batch_size: usize,
     ) -> F {
         self.trainer
@@ -118,8 +118,8 @@ where
 
     pub fn test_epoch(
         &mut self,
-        input: View<Batched<G::Input>, &F>,
-        expected: View<Batched<G::Output>, &F>,
+        input: Input<G, &F>,
+        expected: Output<G, &F>,
     ) -> F {
         self.trainer.test_epoch(input, expected, &mut self.bufs)
     }
@@ -239,8 +239,8 @@ impl<F: Scalar, G: Backprop<F>, O: Optimiser<F>, C: Cost<G::Output>> Trainer<F, 
     fn test_batch(
         &mut self,
         batch_size: usize,
-        input: View<Batched<G::Input>, &F>,
-        expected: View<Batched<G::Output>, &F>,
+        input: Input<G, &F>,
+        expected: Output<G, &F>,
     ) -> F {
         let stack_buf = &mut self.model.stack;
 
@@ -295,8 +295,8 @@ impl<F: Scalar, G: Backprop<F>, O: Optimiser<F>, C: Cost<G::Output>> Trainer<F, 
     fn train_batch(
         &mut self,
         batch_size: usize,
-        input: View<Batched<G::Input>, &F>,
-        expected: View<Batched<G::Output>, &F>,
+        input: Input<G, &F>,
+        expected: Output<G, &F>,
         grads: &mut [F],
     ) -> F {
         let stack_buf = &mut self.model.stack;

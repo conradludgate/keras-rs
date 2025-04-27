@@ -3,7 +3,8 @@ use rand::Rng;
 use rand_distr::{Distribution, Normal, StandardNormal};
 
 use crate::{
-    Backprop, BackpropShape, BackpropShapes, Batched, Initialise, Scalar, Shape, Slice, View,
+    Backprop, BackpropShape, BackpropShapes, Cache, Initialise, Input, Output, Params, Scalar,
+    Shape, Slice, View,
 };
 
 #[derive(Clone, Copy)]
@@ -29,9 +30,7 @@ impl<F: Scalar> Initialise<F> for Linear
 where
     StandardNormal: Distribution<F>,
 {
-    fn init(&self, rng: &mut impl Rng, mut state: View<Self::Params, &mut F>) {
-        // let inputs = F::from_usize(self.input_shape.into_pattern()).unwrap();
-
+    fn init(&self, rng: &mut impl Rng, mut state: Params<Self, &mut F>) {
         let inputs = F::from_usize(state.weights.shape()[0]).unwrap();
 
         let var = F::one() / inputs;
@@ -95,10 +94,10 @@ impl<F: Scalar> Backprop<F> for Linear {
         self,
         _: Self::Input,
         _: usize,
-        p: View<Self::Params, &F>,
-        in_: View<Batched<Self::Input>, &F>,
-        mut out: View<Batched<Self::Output>, &mut F>,
-        c: View<Batched<Self::Cache>, &mut F>,
+        p: Params<Self, &F>,
+        in_: Input<Self, &F>,
+        mut out: Output<Self, &mut F>,
+        c: Cache<Self, &mut F>,
         _: &mut [F],
     ) {
         in_.assign_to(c);
@@ -114,18 +113,18 @@ impl<F: Scalar> Backprop<F> for Linear {
         self,
         _: Self::Input,
         _: usize,
-        p: View<Self::Params, &F>,
-        dout: View<Batched<Self::Output>, &F>,
-        mut din_: View<Batched<Self::Input>, &mut F>,
+        p: Params<Self, &F>,
+        dout: Output<Self, &F>,
+        mut din_: Input<Self, &mut F>,
         mut dp: View<Self::Params, &mut F>,
-        in_: View<Batched<Self::Cache>, &F>,
+        in_: Cache<Self, &F>,
         _: &mut [F],
     ) {
         // d_weights = in_.T @ dout
         general_mat_mul(F::one(), &in_.t(), &dout, F::zero(), &mut dp.weights);
 
         // d_biases = dout.mean(axis = 0)
-        for (dout, d_bias) in std::iter::zip(dout.axis_iter(Axis(1)), &mut dp.biases) {
+        for (dout, d_bias) in std::iter::zip(dout.axis_iter(Axis(0)), &mut dp.biases) {
             *d_bias = dout.mean().unwrap();
         }
 
