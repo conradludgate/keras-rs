@@ -2,11 +2,10 @@ use std::ops::Neg;
 
 use model::Model;
 use ndarray::{
-    ArrayBase, Axis, Dimension, IntoDimension, Ix1, Ix2, LinalgScalar, RawData, ScalarOperand,
-    ViewRepr,
+    ArrayBase, Axis, Data, DataMut, Dimension, IntoDimension, Ix1, Ix2, NdFloat, RawData, ViewRepr,
 };
 use rand::{thread_rng, Rng};
-use rand_distr::num_traits::{Float, FromPrimitive};
+use rand_distr::num_traits::FromPrimitive;
 
 pub mod activation;
 // pub mod attention;
@@ -19,14 +18,8 @@ pub mod model;
 pub mod network;
 pub mod optimise;
 
-pub trait Scalar:
-    LinalgScalar + ScalarOperand + Float + FromPrimitive + Neg<Output = Self> + std::fmt::Debug
-{
-}
-impl<S> Scalar for S where
-    S: LinalgScalar + ScalarOperand + Float + FromPrimitive + Neg<Output = S> + std::fmt::Debug
-{
-}
+pub trait Scalar: NdFloat + FromPrimitive + Neg<Output = Self> {}
+impl<S> Scalar for S where S: NdFloat + FromPrimitive + Neg<Output = S> {}
 
 pub trait Slice: Sized {
     type Repr: RawData;
@@ -60,11 +53,11 @@ pub trait Initialise<Input: BatchShape, F: Scalar>: ModelShape<Input> {
     fn init(&self, rng: &mut impl Rng, state: Params<Input, Self, &mut F>);
 
     fn into_model(self, input_shape: Input) -> Model<F, Input, Self> {
-        let shape = self.shape(input_shape);
-        let len = shape.params.size();
+        let (shape, _) = self.shape(input_shape);
+        let len = shape.size();
         let mut data = vec![F::zero(); len];
 
-        self.init(&mut thread_rng(), shape.params.from_slice(&mut data[..]));
+        self.init(&mut thread_rng(), shape.from_slice(&mut data[..]));
 
         Model {
             input: input_shape,
@@ -79,24 +72,33 @@ pub type View<S, R> = <S as Shape>::Base<ViewRepr<R>>;
 pub type Batched<S> = <S as BatchShape>::Batched;
 pub type Batch<S, R> = View<Batched<S>, R>;
 
-// pub type Input<S, R> = Batch<<S as BackpropShape>::Input, R>;
+pub type Input<I, R> = Batch<I, R>;
 pub type Output<I, S, R> = Batch<<S as ModelShape<I>>::Output, R>;
-pub type TrainingCache<I, S, R> = Batch<<S as BackpropShape<I>>::TrainingCache, R>;
+pub type TrainingCache<I, S, R> = View<<S as BackpropShape<I>>::TrainingCache, R>;
 pub type Params<I, S, R> = View<<S as ModelShape<I>>::Params, R>;
 
 pub trait Shape: Copy {
-    type Base<S: RawData>;
+    type Base<S: RawData>: Array<S, Shape = Self>;
 
     fn size(self) -> usize;
     fn from_slice<S: Slice>(self, slice: S) -> Self::Base<S::Repr>;
+}
 
-    fn as_ref<'a, T>(self, s: &'a Self::Base<ViewRepr<&T>>) -> Self::Base<ViewRepr<&'a T>>;
-    fn as_mut<'a, T>(
-        self,
-        s: &'a mut Self::Base<ViewRepr<&mut T>>,
-    ) -> Self::Base<ViewRepr<&'a mut T>>;
+pub trait Array<R: RawData> {
+    type Shape: Shape;
 
-    fn assign_to<F: Copy>(self, dst: Self::Base<ViewRepr<&mut F>>, src: Self::Base<ViewRepr<&F>>);
+    fn as_ref<'a>(&'a self) -> View<Self::Shape, &'a R::Elem>
+    where
+        R: Data;
+
+    fn as_mut<'a>(&'a mut self) -> View<Self::Shape, &'a mut R::Elem>
+    where
+        R: DataMut;
+
+    fn assign_to(&self, dst: View<Self::Shape, &mut R::Elem>)
+    where
+        R::Elem: Copy,
+        R: Data;
 }
 
 pub trait BatchShape: Shape {
@@ -141,27 +143,31 @@ impl<D: Dimension + Copy> Shape for D {
     fn from_slice<S: Slice>(self, slice: S) -> Self::Base<S::Repr> {
         slice.into_array(self)
     }
+}
 
-    #[inline]
-    fn assign_to<F: Copy>(
-        self,
-        mut dst: Self::Base<ViewRepr<&mut F>>,
-        src: Self::Base<ViewRepr<&F>>,
-    ) {
-        dst.assign(&src);
+impl<R: RawData, D: Dimension + Copy> Array<R> for ArrayBase<R, D> {
+    type Shape = D;
+
+    fn as_ref<'a>(&'a self) -> View<Self::Shape, &'a <R as RawData>::Elem>
+    where
+        R: Data,
+    {
+        self.view()
     }
 
-    #[inline]
-    fn as_ref<'a, T>(self, s: &'a Self::Base<ViewRepr<&T>>) -> Self::Base<ViewRepr<&'a T>> {
-        s.view()
+    fn as_mut<'a>(&'a mut self) -> View<Self::Shape, &'a mut <R as RawData>::Elem>
+    where
+        R: DataMut,
+    {
+        self.view_mut()
     }
 
-    #[inline]
-    fn as_mut<'a, T>(
-        self,
-        s: &'a mut Self::Base<ViewRepr<&mut T>>,
-    ) -> Self::Base<ViewRepr<&'a mut T>> {
-        s.view_mut()
+    fn assign_to(&self, mut dst: View<Self::Shape, &mut <R as RawData>::Elem>)
+    where
+        R: Data,
+        R::Elem: Copy,
+    {
+        dst.assign(self);
     }
 }
 
@@ -194,6 +200,27 @@ impl BatchShape for Ix1 {
     }
 }
 
+pub struct Stack<'a, F>(&'a mut [F]);
+
+impl<'a, F: Scalar> Stack<'a, F> {
+    pub fn new(v: &'a mut Vec<F>, size: usize) -> Self {
+        v.resize(size, F::zero());
+        Self(&mut *v)
+    }
+}
+impl<'b, F> Stack<'b, F> {
+    pub fn take<S: Shape>(self, shape: S) -> (View<S, &'b mut F>, Stack<'b, F>) {
+        let size = shape.size();
+        let (left, right) = self.0.split_at_mut(size);
+        let view = shape.from_slice(left);
+        (view, Stack(right))
+    }
+
+    pub fn as_mut<'a>(&'a mut self) -> Stack<'a, F> {
+        Stack(&mut self.0)
+    }
+}
+
 pub struct ModelShapes<Input, B: ModelShape<Input>> {
     pub params: B::Params,
     pub output: B::Output,
@@ -204,13 +231,14 @@ pub trait ModelShape<Input>: Copy {
     type Params: Shape;
     type Output: BatchShape;
 
-    fn shape(self, input: Input) -> ModelShapes<Input, Self>;
+    fn shape(self, input: Input) -> (Self::Params, Self::Output);
+    fn stack(self, batch_size: usize, input: Input) -> usize;
 }
 
 pub trait BackpropShape<Input>: ModelShape<Input> {
-    type TrainingCache: BatchShape;
+    type TrainingCache: Shape;
 
-    fn shape_with_cache(self, input: Input) -> (ModelShapes<Input, Self>, Self::TrainingCache);
+    fn backprop_shape(self, batch_size: usize, input: Input) -> (Self::TrainingCache, usize);
 }
 
 pub trait Inference<Input: BatchShape, F>: ModelShape<Input> {
@@ -228,7 +256,7 @@ pub trait Inference<Input: BatchShape, F>: ModelShape<Input> {
         params: Params<Input, Self, &F>,
         input: Batch<Input, &F>,
         output: Output<Input, Self, &mut F>,
-        stack: &mut [F],
+        stack: Stack<F>,
     );
 }
 
@@ -249,7 +277,7 @@ pub trait Backprop<Input: BatchShape, F>: Inference<Input, F> + BackpropShape<In
         input: Batch<Input, &F>,
         output: Output<Input, Self, &mut F>,
         cache: TrainingCache<Input, Self, &mut F>,
-        stack: &mut [F],
+        stack: Stack<F>,
     );
 
     /// # Inputs
@@ -273,6 +301,6 @@ pub trait Backprop<Input: BatchShape, F>: Inference<Input, F> + BackpropShape<In
         de_dinput: Batch<Input, &mut F>,
         de_dparams: Params<Input, Self, &mut F>,
         cache: TrainingCache<Input, Self, &F>,
-        stack: &mut [F],
+        stack: Stack<F>,
     );
 }

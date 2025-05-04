@@ -36,6 +36,7 @@ fn main() {
     let model = network.into_model(Ix1(28 * 28));
 
     let optimiser = Adam::new(0.001, 0.9, 0.99, 1e-8);
+    // let optimiser = SGD::new(0.01);
     let mut trainer = Trainer {
         model,
         optimiser,

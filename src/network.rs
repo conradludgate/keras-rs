@@ -2,8 +2,8 @@ use ndarray::RawData;
 use rand::Rng;
 
 use crate::{
-    Backprop, BackpropShape, BatchShape, Batched, Inference, Initialise, ModelShape, ModelShapes,
-    Scalar, Shape, Slice, View,
+    Array, Backprop, BackpropShape, BatchShape, Batched, Inference, Initialise, Input, ModelShape,
+    Output, Scalar, Shape, Slice, Stack, View,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -28,30 +28,61 @@ where
         Net(self.0.from_slice(s0), self.1.from_slice(s1))
     }
 
-    #[inline]
-    fn assign_to<F: Copy>(
-        self,
-        dst: Self::Base<ndarray::ViewRepr<&mut F>>,
-        src: Self::Base<ndarray::ViewRepr<&F>>,
-    ) {
-        self.0.assign_to(dst.0, src.0);
-        self.1.assign_to(dst.1, src.1);
+    // #[inline]
+    // fn assign_to<F: Copy>(
+    //     self,
+    //     dst: Self::Base<ndarray::ViewRepr<&mut F>>,
+    //     src: Self::Base<ndarray::ViewRepr<&F>>,
+    // ) {
+    //     self.0.assign_to(dst.0, src.0);
+    //     self.1.assign_to(dst.1, src.1);
+    // }
+
+    // #[inline]
+    // fn as_ref<'a, T>(
+    //     self,
+    //     s: &'a Self::Base<ndarray::ViewRepr<&T>>,
+    // ) -> Self::Base<ndarray::ViewRepr<&'a T>> {
+    //     Net(self.0.as_ref(&s.0), self.1.as_ref(&s.1))
+    // }
+
+    // #[inline]
+    // fn as_mut<'a, T>(
+    //     self,
+    //     s: &'a mut Self::Base<ndarray::ViewRepr<&mut T>>,
+    // ) -> Self::Base<ndarray::ViewRepr<&'a mut T>> {
+    //     Net(self.0.as_mut(&mut s.0), self.1.as_mut(&mut s.1))
+    // }
+}
+
+impl<S: RawData, S0, S1> Array<S> for Net<S0, S1>
+where
+    S0: Array<S>,
+    S1: Array<S>,
+{
+    type Shape = Net<S0::Shape, S1::Shape>;
+
+    fn as_ref<'a>(&'a self) -> View<Self::Shape, &'a <S as RawData>::Elem>
+    where
+        S: ndarray::Data,
+    {
+        Net(Array::as_ref(&self.0), Array::as_ref(&self.1))
     }
 
-    #[inline]
-    fn as_ref<'a, T>(
-        self,
-        s: &'a Self::Base<ndarray::ViewRepr<&T>>,
-    ) -> Self::Base<ndarray::ViewRepr<&'a T>> {
-        Net(self.0.as_ref(&s.0), self.1.as_ref(&s.1))
+    fn as_mut<'a>(&'a mut self) -> View<Self::Shape, &'a mut <S as RawData>::Elem>
+    where
+        S: ndarray::DataMut,
+    {
+        Net(Array::as_mut(&mut self.0), Array::as_mut(&mut self.1))
     }
 
-    #[inline]
-    fn as_mut<'a, T>(
-        self,
-        s: &'a mut Self::Base<ndarray::ViewRepr<&mut T>>,
-    ) -> Self::Base<ndarray::ViewRepr<&'a mut T>> {
-        Net(self.0.as_mut(&mut s.0), self.1.as_mut(&mut s.1))
+    fn assign_to(&self, dst: View<Self::Shape, &mut <S as RawData>::Elem>)
+    where
+        <S as RawData>::Elem: Copy,
+        S: ndarray::Data,
+    {
+        Array::assign_to(&self.0, dst.0);
+        Array::assign_to(&self.1, dst.1);
     }
 }
 
@@ -107,7 +138,7 @@ where
     }
 }
 
-impl<I, B0, B1> ModelShape<I> for Net<B0, B1>
+impl<I: Copy, B0, B1> ModelShape<I> for Net<B0, B1>
 where
     B0: ModelShape<I>,
     B1: ModelShape<B0::Output>,
@@ -115,36 +146,35 @@ where
     type Params = Net<B0::Params, B1::Params>;
     type Output = B1::Output;
 
-    fn shape(self, input: I) -> ModelShapes<I, Self> {
-        let shape0 = self.0.shape(input);
-        let shape1 = self.1.shape(shape0.output);
-        ModelShapes {
-            params: Net(shape0.params, shape1.params),
-            output: shape1.output,
-            stack_size: shape0.output.batched(1).size()
-                + usize::max(shape0.stack_size, shape1.stack_size),
-        }
+    fn shape(self, input: I) -> (Self::Params, Self::Output) {
+        let (shape0, inner) = self.0.shape(input);
+        let (shape1, output) = self.1.shape(inner);
+        (Net(shape0, shape1), output)
+    }
+
+    fn stack(self, batch_size: usize, input: I) -> usize {
+        let (_, inner) = self.0.shape(input);
+        let stack0 = self.0.stack(batch_size, input);
+        let stack1 = self.1.stack(batch_size, inner);
+
+        inner.batched(batch_size).size() + usize::max(stack0, stack1)
     }
 }
 
-impl<I, B0, B1> BackpropShape<I> for Net<B0, B1>
+impl<I: Copy, B0, B1> BackpropShape<I> for Net<B0, B1>
 where
     B0: BackpropShape<I>,
     B1: BackpropShape<B0::Output>,
 {
     type TrainingCache = Net<B0::TrainingCache, B1::TrainingCache>;
 
-    fn shape_with_cache(self, input: I) -> (ModelShapes<I, Self>, Self::TrainingCache) {
-        let (shape0, cache0) = self.0.shape_with_cache(input);
-        let (shape1, cache1) = self.1.shape_with_cache(shape0.output);
+    fn backprop_shape(self, batch_size: usize, input: I) -> (Self::TrainingCache, usize) {
+        let (_, inner) = self.0.shape(input);
+        let (cache0, stack0) = self.0.backprop_shape(batch_size, input);
+        let (cache1, stack1) = self.1.backprop_shape(batch_size, inner);
         (
-            ModelShapes {
-                params: Net(shape0.params, shape1.params),
-                output: shape1.output,
-                stack_size: shape0.output.batched(1).size()
-                    + usize::max(shape0.stack_size, shape1.stack_size),
-            },
             Net(cache0, cache1),
+            inner.batched(batch_size).size() + usize::max(stack0, stack1),
         )
     }
 }
@@ -160,20 +190,23 @@ where
         i: I,
         b: usize,
         p: View<Self::Params, &F>,
-        in_: View<Batched<I>, &F>,
-        out: View<Batched<Self::Output>, &mut F>,
-        s: &mut [F],
+        in_: Input<I, &F>,
+        out: Output<I, Self, &mut F>,
+        s: Stack<F>,
     ) {
-        let shape0 = self.0.shape(i);
-        let m = shape0.output;
-        let mid_shape = m.batched(b);
-        let (mid_slice, s) = s.split_at_mut(mid_shape.size());
+        let (_, m) = self.0.shape(i);
+        let (mut mid, mut s) = s.take(m.batched(b));
 
-        let mid = mid_shape.from_slice(&mut *mid_slice);
-        self.0.infer(i, b, p.0, in_, mid, s);
+        {
+            let mid = mid.as_mut();
+            let s = s.as_mut();
+            self.0.infer(i, b, p.0, in_, mid, s);
+        }
 
-        let mid = mid_shape.from_slice(&*mid_slice);
-        self.1.infer(m, b, p.1, mid, out, s);
+        {
+            let mid = mid.as_ref();
+            self.1.infer(m, b, p.1, mid, out, s);
+        }
     }
 }
 
@@ -188,21 +221,24 @@ where
         i: I,
         b: usize,
         p: View<Self::Params, &F>,
-        in_: View<Batched<I>, &F>,
-        out: View<Batched<Self::Output>, &mut F>,
-        c: View<Batched<Self::TrainingCache>, &mut F>,
-        s: &mut [F],
+        in_: Input<I, &F>,
+        out: Output<I, Self, &mut F>,
+        c: View<Self::TrainingCache, &mut F>,
+        s: Stack<F>,
     ) {
-        let shape0 = self.0.shape(i);
-        let m = shape0.output;
-        let mid_shape = m.batched(b);
-        let (mid_slice, s) = s.split_at_mut(mid_shape.size());
+        let (_, m) = self.0.shape(i);
+        let (mut mid, mut s) = s.take(m.batched(b));
 
-        let mid = mid_shape.from_slice(&mut *mid_slice);
-        self.0.forward(i, b, p.0, in_, mid, c.0, s);
+        {
+            let mid = mid.as_mut();
+            let s = s.as_mut();
+            self.0.forward(i, b, p.0, in_, mid, c.0, s);
+        }
 
-        let mid = mid_shape.from_slice(&*mid_slice);
-        self.1.forward(m, b, p.1, mid, out, c.1, s);
+        {
+            let mid = mid.as_ref();
+            self.1.forward(m, b, p.1, mid, out, c.1, s);
+        }
     }
 
     fn backward(
@@ -210,22 +246,25 @@ where
         i: I,
         b: usize,
         p: View<Self::Params, &F>,
-        dout: View<Batched<Self::Output>, &F>,
-        din_: View<Batched<I>, &mut F>,
+        dout: Output<I, Self, &F>,
+        din_: Input<I, &mut F>,
         dp: View<Self::Params, &mut F>,
-        c: View<Batched<Self::TrainingCache>, &F>,
-        s: &mut [F],
+        c: View<Self::TrainingCache, &F>,
+        s: Stack<F>,
     ) {
-        let shape0 = self.0.shape(i);
-        let m = shape0.output;
-        let mid_shape = m.batched(b);
-        let (mid_slice, s) = s.split_at_mut(mid_shape.size());
+        let (_, m) = self.0.shape(i);
+        let (mut dmid, mut s) = s.take(m.batched(b));
 
-        let dmid = mid_shape.from_slice(&mut *mid_slice);
-        self.1.backward(m, b, p.1, dout, dmid, dp.1, c.1, s);
+        {
+            let dmid = dmid.as_mut();
+            let s = s.as_mut();
+            self.1.backward(m, b, p.1, dout, dmid, dp.1, c.1, s);
+        }
 
-        let dmid = mid_shape.from_slice(&*mid_slice);
-        self.0.backward(i, b, p.0, dmid, din_, dp.0, c.0, s);
+        {
+            let dmid = dmid.as_ref();
+            self.0.backward(i, b, p.0, dmid, din_, dp.0, c.0, s);
+        }
     }
 }
 

@@ -1,10 +1,12 @@
-use ndarray::{linalg::general_mat_mul, ArrayBase, Axis, Dimension, Ix1, Ix2, RawData};
+use ndarray::{
+    linalg::general_mat_mul, ArrayBase, Axis, Data, DataMut, Dimension, Ix1, Ix2, RawData,
+};
 use rand::Rng;
 use rand_distr::{Distribution, Normal, StandardNormal};
 
 use crate::{
-    Backprop, BackpropShape, Batch, Inference, Initialise, ModelShape, ModelShapes, Scalar, Shape,
-    Slice, View,
+    Array, Backprop, BackpropShape, Batch, BatchShape, Inference, Initialise, ModelShape, Scalar,
+    Shape, Slice, Stack, View,
 };
 
 type Input<R> = Batch<Ix1, R>;
@@ -73,37 +75,37 @@ impl Shape for Layer {
         let biases = biases.into_array(o);
         LinearState { weights, biases }
     }
+}
 
-    #[inline]
-    fn assign_to<F: Copy>(
-        self,
-        mut dst: Self::Base<ndarray::ViewRepr<&mut F>>,
-        src: Self::Base<ndarray::ViewRepr<&F>>,
-    ) {
-        dst.weights.assign(&src.weights);
-        dst.biases.assign(&src.biases);
-    }
+impl<R: RawData> Array<R> for LinearState<R> {
+    type Shape = Layer;
 
-    #[inline]
-    fn as_ref<'a, T>(
-        self,
-        s: &'a Self::Base<ndarray::ViewRepr<&T>>,
-    ) -> Self::Base<ndarray::ViewRepr<&'a T>> {
+    fn as_ref<'a>(&'a self) -> View<Self::Shape, &'a <R as RawData>::Elem>
+    where
+        R: Data,
+    {
         LinearState {
-            weights: s.weights.view(),
-            biases: s.biases.view(),
+            weights: self.weights.view(),
+            biases: self.biases.view(),
         }
     }
 
-    #[inline]
-    fn as_mut<'a, T>(
-        self,
-        s: &'a mut Self::Base<ndarray::ViewRepr<&mut T>>,
-    ) -> Self::Base<ndarray::ViewRepr<&'a mut T>> {
+    fn as_mut<'a>(&'a mut self) -> View<Self::Shape, &'a mut <R as RawData>::Elem>
+    where
+        R: DataMut,
+    {
         LinearState {
-            weights: s.weights.view_mut(),
-            biases: s.biases.view_mut(),
+            weights: self.weights.view_mut(),
+            biases: self.biases.view_mut(),
         }
+    }
+    fn assign_to(&self, mut dst: View<Self::Shape, &mut <R as RawData>::Elem>)
+    where
+        <R as RawData>::Elem: Copy,
+        R: Data,
+    {
+        dst.weights.assign(&self.weights);
+        dst.biases.assign(&self.biases);
     }
 }
 
@@ -111,23 +113,26 @@ impl ModelShape<Ix1> for Linear {
     type Params = Layer;
     type Output = Ix1;
 
-    fn shape(self, input: Ix1) -> ModelShapes<Ix1, Self> {
-        ModelShapes {
-            params: Layer {
+    fn shape(self, input: Ix1) -> (Layer, Ix1) {
+        (
+            Layer {
                 input_shape: input,
                 output_shape: self.output_shape,
             },
-            output: self.output_shape,
-            stack_size: 0,
-        }
+            self.output_shape,
+        )
+    }
+
+    fn stack(self, _: usize, _: Ix1) -> usize {
+        0
     }
 }
 
 impl BackpropShape<Ix1> for Linear {
-    type TrainingCache = Ix1;
+    type TrainingCache = Ix2;
 
-    fn shape_with_cache(self, input: Ix1) -> (ModelShapes<Ix1, Self>, Ix1) {
-        (self.shape(input), input)
+    fn backprop_shape(self, batch_size: usize, input: Ix1) -> (Self::TrainingCache, usize) {
+        (input.batched(batch_size), 0)
     }
 }
 
@@ -139,7 +144,7 @@ impl<F: Scalar> Inference<Ix1, F> for Linear {
         p: Params<&F>,
         in_: Input<&F>,
         mut out: Output<&mut F>,
-        _: &mut [F],
+        _: Stack<F>,
     ) {
         for out in out.axis_iter_mut(Axis(0)) {
             p.biases.assign_to(out);
@@ -158,7 +163,7 @@ impl<F: Scalar> Backprop<Ix1, F> for Linear {
         in_: Input<&F>,
         mut out: Output<&mut F>,
         c: TrainingCache<&mut F>,
-        _: &mut [F],
+        _: Stack<F>,
     ) {
         in_.assign_to(c);
 
@@ -178,7 +183,7 @@ impl<F: Scalar> Backprop<Ix1, F> for Linear {
         mut din_: Input<&mut F>,
         mut dp: View<Self::Params, &mut F>,
         in_: TrainingCache<&F>,
-        _: &mut [F],
+        _: Stack<F>,
     ) {
         // d_weights = in_.T @ dout
         general_mat_mul(F::one(), &in_.t(), &dout, F::zero(), &mut dp.weights);

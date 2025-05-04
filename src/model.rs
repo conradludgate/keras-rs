@@ -2,8 +2,8 @@ use ndarray::Ix1;
 use rand::{prelude::SliceRandom, thread_rng};
 
 use crate::{
-    cost::Cost, optimise::Optimiser, Backprop, Batch, BatchShape, Inference, Output, Scalar, Shape,
-    View,
+    cost::Cost, optimise::Optimiser, Array, Backprop, Batch, BatchShape, Inference, Output, Scalar,
+    Shape, Stack, View,
 };
 
 pub struct Model<F: Scalar, I, G> {
@@ -21,33 +21,39 @@ impl<F: Scalar, I: BatchShape, G: Inference<I, F>> Model<F, I, G> {
     ) -> Output<I, G, &'a mut F> {
         let stack_buf = &mut self.stack;
 
-        let shape = self.layer.shape(self.input);
-        let output_shape = shape.output.batched(batch_size);
+        let (params_shape, output_shape) = self.layer.shape(self.input);
+        let stack_size = self.layer.stack(batch_size, self.input);
+        let output_shape = output_shape.batched(batch_size);
 
         // stack:
         // 0. output
         // 1. rest
 
         let stack0 = output_shape.size();
-        let stack1 = shape.stack_size * batch_size;
+        let stack1 = stack_size;
         let stack_size = stack0 + stack1;
-        stack_buf.resize(stack_size, F::zero());
+        let stack = Stack::new(stack_buf, stack_size);
 
-        let (output_buf, stack) = stack_buf.split_at_mut(stack0);
+        let (mut output, stack) = stack.take(output_shape);
 
-        let params = shape.params.from_slice(&*self.params);
-        let output = output_shape.from_slice(&mut *output_buf);
+        let params = params_shape.from_slice(&*self.params);
 
-        self.layer
-            .infer(self.input, batch_size, params, input, output, &mut *stack);
+        self.layer.infer(
+            self.input,
+            batch_size,
+            params,
+            input,
+            output.as_mut(),
+            stack,
+        );
 
-        output_shape.from_slice(&mut *output_buf)
+        output
     }
 
     pub fn apply_single<'a>(&'a mut self, input: View<I, &F>) -> View<G::Output, &'a mut F> {
-        let shape = self.layer.shape(self.input);
+        let (_, output_shape) = self.layer.shape(self.input);
         let output = self.apply_batch(1, self.input.from_single(input));
-        shape.output.get_single(output, 0)
+        output_shape.get_single(output, 0)
     }
 }
 
@@ -136,7 +142,7 @@ where
 {
     pub fn build(mut self) -> ModelTrainer<F, I, G, O, C> {
         self.optimiser
-            .init(self.model.layer.shape(self.model.input).params.size());
+            .init(self.model.layer.shape(self.model.input).0.size());
         ModelTrainer {
             bufs: Bufs {
                 data: Vec::new(),
@@ -153,10 +159,8 @@ where
         batch_size: usize,
         bufs: &mut Bufs<F>,
     ) -> F {
-        let shape = self.model.layer.shape(self.model.input);
-        let total_inputs = self.model.input.batches(&input);
-        let input_shape = self.model.input.batched(total_inputs);
-        let output_shape = shape.output.batched(total_inputs);
+        let model = &mut self.model;
+        let total_inputs = model.input.batches(&input);
 
         let mut rng = thread_rng();
         let mut indices: Vec<_> = (0..total_inputs).collect();
@@ -164,8 +168,8 @@ where
 
         let mut cost = F::zero();
         for indices in indices.chunks(batch_size) {
-            let input = input_shape.as_ref(input);
-            let expected = output_shape.as_ref(expected);
+            let input = input.as_ref();
+            let expected = expected.as_ref();
 
             let (input, expected) = self.select_batch(input, expected, indices, &mut bufs.data);
             cost = cost + self.train_batch(batch_size, input, expected, &mut bufs.gradiants);
@@ -181,12 +185,20 @@ where
         expected: Output<I, G, &F>,
         grads: &mut [F],
     ) -> F {
-        let stack_buf = &mut self.model.stack;
+        let Self {
+            model,
+            optimiser,
+            cost,
+            regularisation,
+        } = self;
 
-        let (shape, cache_shape) = self.model.layer.shape_with_cache(self.model.input);
-        let input_shape = self.model.input.batched(batch_size);
-        let output_shape = shape.output.batched(batch_size);
-        let cache_shape = cache_shape.batched(batch_size);
+        let stack_buf = &mut model.stack;
+
+        let (params_shape, output_shape) = model.layer.shape(model.input);
+        let (cache_shape, stack_size) = model.layer.backprop_shape(batch_size, model.input);
+        let total_inputs = model.input.batches(&input);
+        let input_shape = model.input.batched(total_inputs);
+        let output_shape = output_shape.batched(total_inputs);
 
         // stack:
         // 0. doutput
@@ -197,48 +209,46 @@ where
         let stack0 = output_shape.size();
         let stack1 = cache_shape.size();
         let stack2 = usize::max(output_shape.size(), input_shape.size());
-        let stack3 = shape.stack_size * batch_size;
+        let stack3 = stack_size;
         let stack_size = stack0 + stack1 + stack2 + stack3;
-        stack_buf.resize(stack_size, F::zero());
+        let stack = Stack::new(stack_buf, stack_size);
 
-        let (doutput_buf, stack) = stack_buf.split_at_mut(stack0);
-        let (cache_buf, stack) = stack.split_at_mut(stack1);
-        let (output_buf, stack) = stack.split_at_mut(stack2);
+        let (mut doutput, stack) = stack.take(output_shape);
+        let (mut cache, mut stack) = stack.take(cache_shape);
 
-        // forward
-        {
-            let params = shape.params.from_slice(&*self.model.params);
-            let output = output_shape.from_slice(&mut output_buf[..output_shape.size()]);
-            let cache = cache_shape.from_slice(&mut *cache_buf);
+        let cost = {
+            let params = params_shape.from_slice(&*model.params);
+            let cache = cache.as_mut();
+            let doutput = doutput.as_mut();
+            let (mut output, stack) = stack.as_mut().take(output_shape);
 
-            self.model.layer.forward(
-                self.model.input,
+            model.layer.forward(
+                model.input,
                 batch_size,
                 params,
                 input,
-                output,
+                output.as_mut(),
                 cache,
                 stack,
             );
-        }
 
-        // eval
-        let cost = {
-            let doutput = output_shape.from_slice(&mut *doutput_buf);
-            let output = output_shape.from_slice(&output_buf[..output_shape.size()]);
-            self.cost.diff(output, expected, doutput)
+            let output = output.as_ref();
+            cost.diff(output, expected, doutput)
         };
 
         // backwards
         {
-            let params = shape.params.from_slice(&*self.model.params);
-            let cache = cache_shape.from_slice(&*cache_buf);
-            let doutput = output_shape.from_slice(&*doutput_buf);
-            let dinput = input_shape.from_slice(&mut output_buf[..input_shape.size()]);
-            let dparams = shape.params.from_slice(&mut *grads);
+            let params = params_shape.from_slice(&*model.params);
+            // let cache = cache_shape.from_slice(&*cache_buf);
+            // let doutput = output_shape.from_slice(&*doutput_buf);
+            // let dinput = input_shape.from_slice(&mut output_buf[..input_shape.size()]);
+            let cache = cache.as_ref();
+            let doutput = doutput.as_ref();
+            let (dinput, stack) = stack.take(input_shape);
+            let dparams = params_shape.from_slice(&mut *grads);
 
-            self.model.layer.backward(
-                self.model.input,
+            model.layer.backward(
+                model.input,
                 batch_size,
                 params,
                 doutput,
@@ -249,11 +259,11 @@ where
             );
         }
 
-        if let Some(r) = self.regularisation {
-            r.apply(grads, &self.model.params);
+        if let Some(r) = regularisation {
+            r.apply(grads, &model.params);
         }
 
-        self.optimiser.optimise(&mut self.model.params, grads);
+        optimiser.optimise(&mut model.params, grads);
         cost
     }
 }
@@ -272,15 +282,14 @@ where
         expected: &Output<I, G, &F>,
         bufs: &mut Bufs<F>,
     ) -> F {
-        let shape = self.model.layer.shape(self.model.input);
-        let total_inputs = self.model.input.batches(&input);
-        let input_shape = self.model.input.batched(total_inputs);
-        let output_shape = shape.output.batched(total_inputs);
+        let model = &mut self.model;
+
+        let total_inputs = model.input.batches(&input);
 
         let mut cost = F::zero();
         for indices in 0..total_inputs {
-            let input = input_shape.as_ref(input);
-            let expected = output_shape.as_ref(expected);
+            let input = input.as_ref();
+            let expected = expected.as_ref();
 
             let (input, expected) = self.select_batch(input, expected, &[indices], &mut bufs.data);
             cost = cost + self.test_batch(1, input, expected);
@@ -295,10 +304,13 @@ where
         input: Batch<I, &F>,
         expected: Output<I, G, &F>,
     ) -> F {
-        let stack_buf = &mut self.model.stack;
+        let Self { model, cost, .. } = self;
 
-        let shape = self.model.layer.shape(self.model.input);
-        let output_shape = shape.output.batched(batch_size);
+        let stack_buf = &mut model.stack;
+
+        let (params_shape, output_shape) = model.layer.shape(model.input);
+        let output_shape = output_shape.batched(batch_size);
+        let stack_size = model.layer.stack(batch_size, model.input);
 
         // stack:
         // 0. doutput
@@ -307,30 +319,26 @@ where
 
         let stack0 = output_shape.size();
         let stack1 = output_shape.size();
-        let stack2 = shape.stack_size * batch_size;
+        let stack2 = stack_size;
         let stack_size = stack0 + stack1 + stack2;
-        stack_buf.resize(stack_size, F::zero());
+        let stack = Stack::new(stack_buf, stack_size);
 
-        let (doutput_buf, stack) = stack_buf.split_at_mut(stack0);
-        let (output_buf, stack) = stack.split_at_mut(stack1);
+        let (doutput, mut stack) = stack.take(output_shape);
 
-        // infer
-        {
-            let params = shape.params.from_slice(&*self.model.params);
-            let output = output_shape.from_slice(&mut output_buf[..output_shape.size()]);
+        let params = params_shape.from_slice(&*model.params);
+        let (mut output, stack) = stack.as_mut().take(output_shape);
 
-            self.model
-                .layer
-                .infer(self.model.input, batch_size, params, input, output, stack);
-        }
+        model.layer.infer(
+            model.input,
+            batch_size,
+            params,
+            input,
+            output.as_mut(),
+            stack,
+        );
 
-        // eval
-        let cost = {
-            let doutput = output_shape.from_slice(&mut *doutput_buf);
-            let output = output_shape.from_slice(&output_buf[..output_shape.size()]);
-            self.cost.diff(output, expected, doutput)
-        };
-        cost
+        let output = output.as_ref();
+        cost.diff(output, expected, doutput)
     }
 
     fn select_batch<'a>(
@@ -342,41 +350,43 @@ where
     ) -> (Batch<I, &'a F>, Output<I, G, &'a F>) {
         data_buf.clear();
 
-        let shape = self.model.layer.shape(self.model.input);
-        let output_shape = shape.output.batched(indices.len());
-        let input_shape = self.model.input.batched(indices.len());
+        let (_, output_shape) = self.model.layer.shape(self.model.input);
 
-        let input_size = input_shape.size();
-        let output_size = output_shape.size();
+        let input_size = self.model.input.batched_size(indices.len());
+        let output_size = output_shape.batched_size(indices.len());
         let total_size = input_size + output_size;
         data_buf.resize(total_size, F::zero());
 
         let (input_buf, output_buf) = data_buf.split_at_mut(input_size);
 
-        {
-            let mut dst_input = input_shape.from_slice(&mut *input_buf);
-            let mut dst_output = output_shape.from_slice(&mut *output_buf);
+        let inputs = fill(self.model.input, indices, input_buf, input);
+        let outputs = fill(output_shape, indices, output_buf, expected);
 
-            for (i, &index) in indices.iter().enumerate() {
-                let dst_input = input_shape.as_mut(&mut dst_input);
-                let input = input_shape.as_ref(&input);
-                let dst = self.model.input.get_single(dst_input, i);
-                let src = self.model.input.get_single(input, index);
-                self.model.input.assign_to(dst, src);
-
-                let dst_output = output_shape.as_mut(&mut dst_output);
-                let expected = output_shape.as_ref(&expected);
-                let dst = shape.output.get_single(dst_output, i);
-                let src = shape.output.get_single(expected, index);
-                shape.output.assign_to(dst, src);
-            }
-        }
-
-        let dst_input = input_shape.from_slice(&*input_buf);
-        let dst_output = output_shape.from_slice(&*output_buf);
-
-        (dst_input, dst_output)
+        (inputs, outputs)
     }
+}
+
+fn fill<'a, F: Scalar, I: BatchShape>(
+    size: I,
+    indices: &[usize],
+    space: &'a mut [F],
+    from: Batch<I, &F>,
+) -> Batch<I, &'a F> {
+    let batch = size.batched(indices.len());
+
+    {
+        let mut space = batch.from_slice(&mut *space);
+
+        for (i, &index) in indices.iter().enumerate() {
+            let space = space.as_mut();
+            let from = from.as_ref();
+            let dst = size.get_single(space, i);
+            let src = size.get_single(from, index);
+            src.assign_to(dst);
+        }
+    }
+
+    batch.from_slice(&*space)
 }
 
 #[derive(Debug, Clone, Copy)]
